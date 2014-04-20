@@ -31,31 +31,24 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #include <utility>
 #include <fstream>
 #include <string>
+#include "UserMessage.h"
 
 #ifdef WITH_THREADS
 #include <boost/thread.hpp>
 #include <boost/thread/mutex.hpp>
 #endif
 
-#include "TypeDef.h"
-#include "FactorCollection.h"
 #include "Parameter.h"
-#include "LM/Base.h"
 #include "SentenceStats.h"
-#include "DecodeGraph.h"
-#include "TranslationOptionList.h"
 #include "ScoreComponentCollection.h"
-#include "moses/TranslationModel/PhraseDictionary.h"
+#include "moses/FF/Factory.h"
 
 namespace Moses
 {
 
 class InputType;
-class PhraseDictionary;
-class GenerationDictionary;
+class DecodeGraph;
 class DecodeStep;
-class WordPenaltyProducer;
-class UnknownWordPenaltyProducer;
 
 typedef std::pair<std::string, float> UnknownLHSEntry;
 typedef std::vector<UnknownLHSEntry>  UnknownLHSList;
@@ -66,19 +59,17 @@ typedef std::vector<UnknownLHSEntry>  UnknownLHSList;
  */
 class StaticData
 {
+  friend class HyperParameterAsWeight;
+
 private:
   static StaticData									s_instance;
 protected:
-
-  std::map<long,Phrase> m_constraints;
-  std::vector<PhraseDictionary*>	m_phraseDictionary;
-  std::vector<const GenerationDictionary*>	m_generationDictionary;
   Parameter *m_parameter;
   std::vector<FactorType>	m_inputFactorOrder, m_outputFactorOrder;
   mutable ScoreComponentCollection m_allWeights;
 
   std::vector<DecodeGraph*> m_decodeGraphs;
-  std::vector<size_t> m_decodeGraphBackoff;
+
   // Initial	= 0 = can be used when creating poss trans
   // Other		= 1 = used to calculate LM score once all steps have been processed
   float
@@ -103,15 +94,12 @@ protected:
   , m_nBestFactor
   , m_maxNoTransOptPerCoverage
   , m_maxNoPartTransOpt
-  , m_maxPhraseLength
-  , m_numRealWordsInInput;
-
-  std::string
-  m_constraintFileName;
+  , m_maxPhraseLength;
 
   std::string									m_nBestFilePath, m_latticeSamplesFilePath;
   bool                        m_labeledNBestList,m_nBestIncludesSegmentation;
   bool m_dropUnknown; //! false = treat unknown words as unknowns, and translate them as themselves; true = drop (ignore) them
+  bool m_markUnknown; //! false = treat unknown words as unknowns, and translate them as themselves; true = mark and (ignore) them
   bool m_wordDeletionEnabled;
 
   bool m_disableDiscarding;
@@ -121,19 +109,21 @@ protected:
   bool m_recoverPath;
   bool m_outputHypoScore;
 
-  ParsingAlgorithm m_parsingAlgorithm;
   SearchAlgorithm m_searchAlgorithm;
   InputTypeEnum m_inputType;
-  size_t m_numInputScores;
 
   mutable size_t m_verboseLevel;
-  WordPenaltyProducer* m_wpProducer;
-  UnknownWordPenaltyProducer *m_unknownWordPenaltyProducer;
 
   bool m_reportSegmentation;
+  bool m_reportSegmentationEnriched;
   bool m_reportAllFactors;
   bool m_reportAllFactorsNBest;
   std::string m_detailedTranslationReportingFilePath;
+  std::string m_detailedTreeFragmentsTranslationReportingFilePath;
+
+  //DIMw
+  std::string m_detailedAllTranslationReportingFilePath;
+
   bool m_onlyDistinctNBest;
   bool m_PrintAlignmentInfo;
   bool m_needAlignmentInfo;
@@ -165,14 +155,6 @@ protected:
   bool m_timeout; //! use timeout
   size_t m_timeout_threshold; //! seconds after which time out is activated
 
-  bool m_useTransOptCache; //! flag indicating, if the persistent translation option cache should be used
-  mutable std::map<std::pair<size_t, Phrase>, std::pair<TranslationOptionList*,clock_t> > m_transOptCache; //! persistent translation option cache
-  size_t m_transOptCacheMaxSize; //! maximum size for persistent translation option cache
-  //FIXME: Single lock for cache not most efficient. However using a
-  //reader-writer for LRU cache is tricky - how to record last used time?
-#ifdef WITH_THREADS
-  mutable boost::mutex m_transOptCacheMutex;
-#endif
   bool m_isAlwaysCreateDirectTranslationOption;
   //! constructor. only the 1 static variable can be created
 
@@ -206,12 +188,20 @@ protected:
 
   int m_threadCount;
   long m_startTranslationId;
-  
+
   // alternate weight settings
-  std::map< std::string, ScoreComponentCollection* > m_weightSetting;
+  mutable std::string m_currentWeightSetting;
+  std::map< std::string, ScoreComponentCollection* > m_weightSetting; // core weights
+  std::map< std::string, std::set< std::string > > m_weightSettingIgnoreFF; // feature function
+  std::map< std::string, std::set< size_t > > m_weightSettingIgnoreDP; // decoding path
+
+  FactorType m_placeHolderFactor;
+  bool m_useLegacyPT;
+  bool m_adjacentOnly;
+
+  FeatureRegistry m_registry;
 
   StaticData();
-
 
   void LoadChartDecodingParameters();
   void LoadNonTerminals();
@@ -222,10 +212,18 @@ protected:
   //! load decoding steps
   bool LoadDecodeGraphs();
 
-  void ReduceTransOptCache() const;
-  bool m_continuePartialTranslation;
+  void NoCache();
 
+  bool m_continuePartialTranslation;
   std::string m_binPath;
+
+  // soft NT lookup for chart models
+  std::vector<std::vector<Word> > m_softMatchesMap;
+
+  const StatefulFeatureFunction* m_treeStructure;
+
+  // number of nonterminal labels
+//   size_t m_nonTerminalSize;
 
 public:
 
@@ -278,6 +276,9 @@ public:
   inline bool GetDropUnknown() const {
     return m_dropUnknown;
   }
+  inline bool GetMarkUnknown() const {
+    return m_markUnknown;
+  }
   inline bool GetDisableDiscarding() const {
     return m_disableDiscarding;
   }
@@ -286,15 +287,6 @@ public:
   }
   inline size_t GetMaxNoPartTransOpt() const {
     return m_maxNoPartTransOpt;
-  }
-  inline const Phrase* GetConstrainingPhrase(long sentenceID) const {
-    std::map<long,Phrase>::const_iterator iter = m_constraints.find(sentenceID);
-    if (iter != m_constraints.end()) {
-      const Phrase& phrase = iter->second;
-      return &phrase;
-    } else {
-      return NULL;
-    }
   }
   inline size_t GetMaxPhraseLength() const {
     return m_maxPhraseLength;
@@ -348,8 +340,10 @@ public:
   void SetVerboseLevel(int x) const {
     m_verboseLevel = x;
   }
-  bool GetReportSegmentation() const {
-    return m_reportSegmentation;
+  char GetReportSegmentation() const {
+    if (m_reportSegmentation) return 1;
+    if (m_reportSegmentationEnriched) return 2;
+    return 0;
   }
   bool GetReportAllFactors() const {
     return m_reportAllFactors;
@@ -360,8 +354,19 @@ public:
   bool IsDetailedTranslationReportingEnabled() const {
     return !m_detailedTranslationReportingFilePath.empty();
   }
+
+  bool IsDetailedAllTranslationReportingEnabled() const {
+    return !m_detailedAllTranslationReportingFilePath.empty();
+  }
+
   const std::string &GetDetailedTranslationReportingFilePath() const {
     return m_detailedTranslationReportingFilePath;
+  }
+  bool IsDetailedTreeFragmentsTranslationReportingEnabled() const {
+    return !m_detailedTreeFragmentsTranslationReportingFilePath.empty();
+  }
+  const std::string &GetDetailedTreeFragmentsTranslationReportingFilePath() const {
+    return m_detailedTreeFragmentsTranslationReportingFilePath;
   }
   bool IsLabeledNBestList() const {
     return m_labeledNBestList;
@@ -375,9 +380,6 @@ public:
     return m_minlexrMemory;
   }
 
-  size_t GetNumRealWordsInInput() const {
-    return m_numRealWordsInInput;
-  }
   const std::vector<std::string> &GetDescription() const {
     return m_parameter->GetParam("description");
   }
@@ -415,28 +417,11 @@ public:
   InputTypeEnum GetInputType() const {
     return m_inputType;
   }
-  ParsingAlgorithm GetParsingAlgorithm() const {
-    return m_parsingAlgorithm;
-  }
   SearchAlgorithm GetSearchAlgorithm() const {
     return m_searchAlgorithm;
   }
   bool IsChart() const {
     return m_searchAlgorithm == ChartDecoding || m_searchAlgorithm == ChartIncremental;
-  }
-  const WordPenaltyProducer *GetWordPenaltyProducer() const {
-    return m_wpProducer;
-  }
-  WordPenaltyProducer *GetWordPenaltyProducer() { // for mira
-    return m_wpProducer;
-  }
-
-  const UnknownWordPenaltyProducer *GetUnknownWordPenaltyProducer() const {
-    return m_unknownWordPenaltyProducer;
-  }
-
-  size_t GetNumInputScores() const {
-    return m_numInputScores;
   }
 
   const ScoreComponentCollection& GetAllWeights() const {
@@ -579,17 +564,6 @@ public:
     return m_xmlBrackets;
   }
 
-  bool GetUseTransOptCache() const {
-    return m_useTransOptCache;
-  }
-
-  void AddTransOptListToCache(const DecodeGraph &decodeGraph, const Phrase &sourcePhrase, const TranslationOptionList &transOptList) const;
-
-  void ClearTransOptionCache() const;
-
-
-  const TranslationOptionList* FindTransOptListInCache(const DecodeGraph &decodeGraph, const Phrase &sourcePhrase) const;
-
   bool PrintAllDerivations() const {
     return m_printAllDerivations;
   }
@@ -665,42 +639,79 @@ public:
     return m_weightSetting.size() > 0;
   }
 
+  /** Alternate weight settings allow the wholesale ignoring of
+      feature functions. This function checks if a feature function
+      should be evaluated given the current weight setting */
+  bool IsFeatureFunctionIgnored( const FeatureFunction &ff ) const {
+    if (!GetHasAlternateWeightSettings()) {
+      return false;
+    }
+    std::map< std::string, std::set< std::string > >::const_iterator lookupIgnoreFF
+    =  m_weightSettingIgnoreFF.find( m_currentWeightSetting );
+    if (lookupIgnoreFF == m_weightSettingIgnoreFF.end()) {
+      return false;
+    }
+    const std::string &ffName = ff.GetScoreProducerDescription();
+    const std::set< std::string > &ignoreFF = lookupIgnoreFF->second;
+    return ignoreFF.count( ffName );
+  }
+
+  /** Alternate weight settings allow the wholesale ignoring of
+      decoding graphs (typically a translation table). This function
+      checks if a feature function should be evaluated given the
+      current weight setting */
+  bool IsDecodingGraphIgnored( const size_t id ) const {
+    if (!GetHasAlternateWeightSettings()) {
+      return false;
+    }
+    std::map< std::string, std::set< size_t > >::const_iterator lookupIgnoreDP
+    =  m_weightSettingIgnoreDP.find( m_currentWeightSetting );
+    if (lookupIgnoreDP == m_weightSettingIgnoreDP.end()) {
+      return false;
+    }
+    const std::set< size_t > &ignoreDP = lookupIgnoreDP->second;
+    return ignoreDP.count( id );
+  }
+
+  /** process alternate weight settings
+    * (specified with [alternate-weight-setting] in config file) */
   void SetWeightSetting(const std::string &settingName) const {
-    std::cerr << "SetWeightSetting( " << settingName << ")\n";
-    CHECK(GetHasAlternateWeightSettings());
+
+    // if no change in weight setting, do nothing
+    if (m_currentWeightSetting == settingName) {
+      return;
+    }
+
+    // model must support alternate weight settings
+    if (!GetHasAlternateWeightSettings()) {
+      UserMessage::Add("Warning: Input specifies weight setting, but model does not support alternate weight settings.");
+      return;
+    }
+
+    // find the setting
+    m_currentWeightSetting = settingName;
     std::map< std::string, ScoreComponentCollection* >::const_iterator i =
       m_weightSetting.find( settingName );
+
     // if not found, resort to default
-    std::cerr << "using weight setting " << settingName << std::endl;
     if (i == m_weightSetting.end()) {
+      std::stringstream strme;
+      strme << "Warning: Specified weight setting " << settingName
+            << " does not exist in model, using default weight setting instead";
+      UserMessage::Add(strme.str());
       i = m_weightSetting.find( "default" );
-      std::cerr << "not found, using default weight setting instead\n";
+      m_currentWeightSetting = "default";
     }
+
+    // set weights
     m_allWeights = *(i->second);
   }
 
   float GetWeightWordPenalty() const;
   float GetWeightUnknownWordPenalty() const;
 
-  const std::vector<PhraseDictionary*>& GetPhraseDictionaries() const {
-    return m_phraseDictionary;
-  }
-  const std::vector<const GenerationDictionary*>& GetGenerationDictionaries() const {
-    return m_generationDictionary;
-  }
-  const PhraseDictionary*GetTranslationScoreProducer(size_t index) const {
-    return GetPhraseDictionaries().at(index);
-  }
-  std::vector<float> GetTranslationWeights(size_t index) const {
-    std::vector<float> weights = GetWeights(GetTranslationScoreProducer(index));
-    return weights;
-  }
-
   const std::vector<DecodeGraph*>& GetDecodeGraphs() const {
     return m_decodeGraphs;
-  }
-  const std::vector<size_t>& GetDecodeGraphBackoff() const {
-    return m_decodeGraphBackoff;
   }
 
   //sentence (and thread) specific initialisationn and cleanup
@@ -709,34 +720,51 @@ public:
 
   void LoadFeatureFunctions();
   bool CheckWeights() const;
-  void ProcessAlternateWeightSettings();
+  void LoadSparseWeightsFromConfig();
+  bool LoadWeightSettings();
+  bool LoadAlternateWeightSettings();
 
+  std::map<std::string, std::string> OverrideFeatureNames();
+  void OverrideFeatures();
 
-  void SetTemporaryMultiModelWeightsVector(std::vector<float> weights) const {
-#ifdef WITH_THREADS
-    m_multimodelweights_tmp[boost::this_thread::get_id()] = weights;
-#else
-    m_multimodelweights_tmp = weights;
-#endif
+  FactorType GetPlaceholderFactor() const {
+    return m_placeHolderFactor;
   }
 
-  // multimodel
-#ifdef WITH_THREADS
-  mutable std::map<boost::thread::id, std::vector<float> > m_multimodelweights_tmp;
-#else
-  mutable std::vector<float> m_multimodelweights_tmp;
-#endif
+  const FeatureRegistry &GetFeatureRegistry() const
+  { return m_registry; }
 
-  const std::vector<float>* GetTemporaryMultiModelWeightsVector() const {
-#ifdef WITH_THREADS
-    if (m_multimodelweights_tmp.find(boost::this_thread::get_id()) != m_multimodelweights_tmp.end()) {
-      return &m_multimodelweights_tmp.find(boost::this_thread::get_id())->second;
-    } else {
-      return NULL;
-    }
-#else
-    return &m_multimodelweights_tmp;
-#endif
+  /** check whether we should be using the old code to support binary phrase-table.
+  ** eventually, we'll stop support the binary phrase-table and delete this legacy code
+  **/
+  void CheckLEGACYPT();
+  bool GetUseLegacyPT() const {
+    return m_useLegacyPT;
+  }
+
+  void SetSoftMatches(std::vector<std::vector<Word> >& softMatchesMap) {
+    m_softMatchesMap = softMatchesMap;
+  }
+
+  const std::vector< std::vector<Word> >& GetSoftMatches() const {
+    return m_softMatchesMap;
+  }
+
+
+  bool AdjacentOnly() const
+  { return m_adjacentOnly; }
+
+
+  void ResetWeights(const std::string &denseWeights, const std::string &sparseFile);
+
+
+  // need global access for output of tree structure
+  const StatefulFeatureFunction* GetTreeStructure() const {
+      return m_treeStructure;
+  }
+
+  void SetTreeStructure(const StatefulFeatureFunction* treeStructure) {
+      m_treeStructure = treeStructure;
   }
 
 };

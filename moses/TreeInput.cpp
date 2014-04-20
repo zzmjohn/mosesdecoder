@@ -4,6 +4,7 @@
 #include "StaticData.h"
 #include "Util.h"
 #include "XmlOption.h"
+#include "FactorCollection.h"
 
 using namespace std;
 
@@ -182,7 +183,8 @@ bool TreeInput::ProcessAndStripXMLTags(string &line, std::vector<XMLParseOutput>
             }
             Word *targetLHS = new Word(true);
             targetLHS->CreateFromString(Output, outputFactorOrder, targetLHSstr, true);
-            CHECK(targetLHS->GetFactor(0) != NULL);
+            UTIL_THROW_IF2(targetLHS->GetFactor(0) == NULL,
+            		"Null factor left-hand-side");
             targetPhrase.SetTargetLHS(targetLHS);
 
             // not tested
@@ -201,7 +203,7 @@ bool TreeInput::ProcessAndStripXMLTags(string &line, std::vector<XMLParseOutput>
             // set span and create XmlOption
             WordsRange range(startPos+1,endPos);
             XmlOption *option = new XmlOption(range,targetPhrase);
-            CHECK(option);
+            assert(option);
             xmlOptions.push_back(option);
 
             VERBOSE(2,"xml translation = [" << range << "] " << targetLHSstr << " -> " << altTexts[i] << " prob: " << probValue << endl);
@@ -235,8 +237,7 @@ int TreeInput::Read(std::istream& in,const std::vector<FactorType>& factorOrder)
   //line = Trim(line);
 
   std::vector<XMLParseOutput> sourceLabels;
-  std::vector<XmlOption*> xmlOptionsList;
-  ProcessAndStripXMLTags(line, sourceLabels, xmlOptionsList);
+  ProcessAndStripXMLTags(line, sourceLabels, m_xmlOptions);
 
   // do words 1st - hack
   stringstream strme;
@@ -268,42 +269,6 @@ int TreeInput::Read(std::istream& in,const std::vector<FactorType>& factorOrder)
     }
   }
 
-  // XML Options
-
-  //only fill the vector if we are parsing XML
-  if (staticData.GetXmlInputType() != XmlPassThrough ) {
-    //TODO: needed to handle exclusive
-    //for (size_t i=0; i<GetSize(); i++) {
-    //  m_xmlCoverageMap.push_back(false);
-    //}
-
-    //iterXMLOpts will be empty for XmlIgnore
-    //look at each column
-    for(std::vector<XmlOption*>::const_iterator iterXmlOpts = xmlOptionsList.begin();
-        iterXmlOpts != xmlOptionsList.end(); iterXmlOpts++) {
-
-      const XmlOption *xmlOption = *iterXmlOpts;
-      TargetPhrase *targetPhrase = new TargetPhrase(xmlOption->targetPhrase);
-      *targetPhrase = xmlOption->targetPhrase; // copy everything
-      WordsRange *range = new WordsRange(xmlOption->range);
-      const StackVec emptyStackVec; // hmmm... maybe dangerous, but it is never consulted
-
-      TargetPhraseCollection *tpc = new TargetPhraseCollection;
-      tpc->Add(targetPhrase);
-
-      ChartTranslationOptions *transOpt = new ChartTranslationOptions(*tpc, emptyStackVec, *range, 0.0f);
-      m_xmlChartOptionsList.push_back(transOpt);
-
-      //TODO: needed to handle exclusive
-      //for(size_t j=transOpt->GetSourceWordsRange().GetStartPos(); j<=transOpt->GetSourceWordsRange().GetEndPos(); j++) {
-      //  m_xmlCoverageMap[j]=true;
-      //}
-
-      delete xmlOption;
-    }
-
-  }
-
   return 1;
 }
 
@@ -323,7 +288,8 @@ TranslationOptionCollection* TreeInput::CreateTranslationOptionCollection() cons
 void TreeInput::AddChartLabel(size_t startPos, size_t endPos, const Word &label
                               , const std::vector<FactorType>& /* factorOrder */)
 {
-  CHECK(label.IsNonTerminal());
+  UTIL_THROW_IF2(!label.IsNonTerminal(),
+		  "Label must be a non-terminal");
 
   SourceLabelOverlap overlapType = StaticData::Instance().GetSourceLabelOverlap();
   NonTerminalSet &list = GetLabelSet(startPos, endPos);
@@ -347,7 +313,7 @@ void TreeInput::AddChartLabel(size_t startPos, size_t endPos, const string &labe
                               , const std::vector<FactorType>& factorOrder)
 {
   Word word(true);
-  const Factor *factor = FactorCollection::Instance().AddFactor(Input, factorOrder[0], label); // TODO - no factors
+  const Factor *factor = FactorCollection::Instance().AddFactor(Input, factorOrder[0], label, true); // TODO - no factors
   word.SetFactor(0, factor);
 
   AddChartLabel(startPos, endPos, word, factorOrder);
@@ -364,9 +330,10 @@ std::ostream& operator<<(std::ostream &out, const TreeInput &input)
       NonTerminalSet::const_iterator iter;
       for (iter = labelSet.begin(); iter != labelSet.end(); ++iter) {
         const Word &word = *iter;
+        UTIL_THROW_IF2(!word.IsNonTerminal(),
+      		  "Word must be a non-terminal");
         out << "[" << startPos <<"," << endPos << "]="
             << word << "(" << word.IsNonTerminal() << ") ";
-        CHECK(word.IsNonTerminal());
       }
     }
   }

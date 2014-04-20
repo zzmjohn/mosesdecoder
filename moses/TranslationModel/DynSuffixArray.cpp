@@ -1,5 +1,6 @@
 #include "DynSuffixArray.h"
 #include <iostream>
+#include <boost/foreach.hpp>
 
 using namespace std;
 
@@ -109,7 +110,7 @@ void DynSuffixArray::Insert(vuint_t* newSent, unsigned newIndex)
   //stage 3...all words of new sentence are inserted backwards
   // stage 2: k=ISA[newIndex], tmp= L[k], L[k]  = newChar
   //PrintAuxArrays();
-  CHECK(newIndex <= m_SA->size());
+  UTIL_THROW_IF2(newIndex > m_SA->size(), "Error");
   int k(-1), kprime(-1);
   k = (newIndex < m_SA->size() ? m_ISA->at(newIndex) : m_ISA->at(0)); // k is now index of the cycle that starts at newindex
   int true_pos = LastFirstFunc(k); // track cycle shift (newIndex - 1)
@@ -161,7 +162,7 @@ void DynSuffixArray::Reorder(unsigned j, unsigned jprime)
     //cerr << "j=" << j << "\tj'=" << jprime << endl;
     int isaIdx(-1);
     int new_j = LastFirstFunc(j);
-    CHECK(j <= jprime);
+    UTIL_THROW_IF2(j > jprime, "Error");
     // for SA and L, the element at pos j is moved to pos j'
     m_L->insert(m_L->begin() + jprime + 1, m_L->at(j));
     m_L->erase(m_L->begin() + j);
@@ -215,8 +216,37 @@ void DynSuffixArray::Substitute(vuint_t* /* newSents */, unsigned /* newIndex */
   return;
 }
 
+ComparePosition::
+ComparePosition(vuint_t const& crp, vuint_t const& sfa)
+  : m_crp(crp), m_sfa(sfa) { }
+
+bool
+ComparePosition::
+operator()(unsigned const& i, vector<wordID_t> const& phrase) const
+{
+  unsigned const* x = &m_crp.at(i);
+  unsigned const* e = &m_crp.back();
+  size_t k = 0;
+  for (; k < phrase.size() && x < e; ++k, ++x)
+    if (*x != phrase[k]) return *x < phrase[k];
+  return (x == e && k < phrase.size());
+}
+
+bool
+ComparePosition::
+operator()(vector<wordID_t> const& phrase, unsigned const& i) const
+{
+  unsigned const* x = &m_crp.at(i);
+  unsigned const* e = &m_crp.back();
+  size_t k = 0;
+  for (; k < phrase.size() && x < e; ++k, ++x)
+    if (*x != phrase[k]) return phrase[k] < *x;
+  return false; // (k == phrase.size() && x < e);
+}
+
 bool DynSuffixArray::GetCorpusIndex(const vuint_t* phrase, vuint_t* indices)
 {
+  // DOES THIS EVEN WORK WHEN A DynSuffixArray has been saved and reloaded????
   pair<vuint_t::iterator,vuint_t::iterator> bounds;
   indices->clear();
   size_t phrasesize = phrase->size();
@@ -249,6 +279,16 @@ bool DynSuffixArray::GetCorpusIndex(const vuint_t* phrase, vuint_t* indices)
   }
   //cerr << "Total count of phrase = " << indices->size() << endl;
   return (indices->size() > 0);
+}
+
+size_t
+DynSuffixArray::
+GetCount(vuint_t const& phrase) const
+{
+  ComparePosition cmp(*m_corpus, *m_SA);
+  vuint_t::const_iterator lb = lower_bound(m_SA->begin(), m_SA->end(), phrase, cmp);
+  vuint_t::const_iterator ub = upper_bound(m_SA->begin(), m_SA->end(), phrase, cmp);
+  return ub-lb;
 }
 
 void DynSuffixArray::Save(FILE* fout)

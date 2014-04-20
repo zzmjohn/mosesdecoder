@@ -29,6 +29,8 @@
 #include "StaticData.h"
 #include "ChartTranslationOptions.h"
 #include "moses/FF/FFState.h"
+#include "moses/FF/StatefulFeatureFunction.h"
+#include "moses/FF/StatelessFeatureFunction.h"
 
 using namespace std;
 
@@ -47,7 +49,7 @@ ObjectPool<ChartHypothesis> ChartHypothesis::s_objectPool("ChartHypothesis", 300
 ChartHypothesis::ChartHypothesis(const ChartTranslationOptions &transOpt,
                                  const RuleCubeItem &item,
                                  ChartManager &manager)
-  :m_targetPhrase(*(item.GetTranslationDimension().GetTargetPhrase()))
+  :m_transOpt(item.GetTranslationDimension().GetTranslationOption())
   ,m_currSourceWordsRange(transOpt.GetSourceWordsRange())
   ,m_ffStates(StatefulFeatureFunction::GetStatefulFeatureFunctions().size())
   ,m_arcList(NULL)
@@ -62,6 +64,22 @@ ChartHypothesis::ChartHypothesis(const ChartTranslationOptions &transOpt,
   for (iter = childEntries.begin(); iter != childEntries.end(); ++iter) {
     m_prevHypos.push_back(iter->GetHypothesis());
   }
+}
+
+// Intended to be used by ChartKBestExtractor only.  This creates a mock
+// ChartHypothesis for use by the extractor's top-level target vertex.
+ChartHypothesis::ChartHypothesis(const ChartHypothesis &pred,
+                                 const ChartKBestExtractor & /*unused*/)
+  :m_currSourceWordsRange(pred.m_currSourceWordsRange)
+  ,m_scoreBreakdown(pred.m_scoreBreakdown)
+  ,m_totalScore(pred.m_totalScore)
+  ,m_arcList(NULL)
+  ,m_winningHypo(NULL)
+  ,m_manager(pred.m_manager)
+  ,m_id(pred.m_manager.GetNextHypoId())
+{
+  // One predecessor, which is an existing top-level ChartHypothesis.
+  m_prevHypos.push_back(&pred);
 }
 
 ChartHypothesis::~ChartHypothesis()
@@ -87,8 +105,9 @@ ChartHypothesis::~ChartHypothesis()
 /** Create full output phrase that is contained in the hypothesis (and its children)
  * \param outPhrase full output phrase as return argument
  */
-void ChartHypothesis::CreateOutputPhrase(Phrase &outPhrase) const
+void ChartHypothesis::GetOutputPhrase(Phrase &outPhrase) const
 {
+  FactorType placeholderFactor = StaticData::Instance().GetPlaceholderFactor();
 
   for (size_t pos = 0; pos < GetCurrTargetPhrase().GetSize(); ++pos) {
     const Word &word = GetCurrTargetPhrase().GetWord(pos);
@@ -96,9 +115,28 @@ void ChartHypothesis::CreateOutputPhrase(Phrase &outPhrase) const
       // non-term. fill out with prev hypo
       size_t nonTermInd = GetCurrTargetPhrase().GetAlignNonTerm().GetNonTermIndexMap()[pos];
       const ChartHypothesis *prevHypo = m_prevHypos[nonTermInd];
-      prevHypo->CreateOutputPhrase(outPhrase);
+      prevHypo->GetOutputPhrase(outPhrase);
     } else {
       outPhrase.AddWord(word);
+
+      if (placeholderFactor != NOT_FOUND) {
+        std::set<size_t> sourcePosSet = GetCurrTargetPhrase().GetAlignTerm().GetAlignmentsForTarget(pos);
+        if (sourcePosSet.size() == 1) {
+          const std::vector<const Word*> *ruleSourceFromInputPath = GetTranslationOption().GetSourceRuleFromInputPath();
+          UTIL_THROW_IF2(ruleSourceFromInputPath == NULL,
+        		  "No source rule");
+
+          size_t sourcePos = *sourcePosSet.begin();
+          const Word *sourceWord = ruleSourceFromInputPath->at(sourcePos);
+          UTIL_THROW_IF2(sourceWord == NULL,
+        		  "No source word");
+          const Factor *factor = sourceWord->GetFactor(placeholderFactor);
+          if (factor) {
+            outPhrase.Back()[0] = factor;
+          }
+        }
+      }
+
     }
   }
 }
@@ -107,7 +145,7 @@ void ChartHypothesis::CreateOutputPhrase(Phrase &outPhrase) const
 Phrase ChartHypothesis::GetOutputPhrase() const
 {
   Phrase outPhrase(ARRAY_SIZE_INCR);
-  CreateOutputPhrase(outPhrase);
+  GetOutputPhrase(outPhrase);
   return outPhrase;
 }
 
@@ -140,8 +178,9 @@ int ChartHypothesis::RecombineCompare(const ChartHypothesis &compare) const
 /** calculate total score
   * @todo this should be in ScoreBreakdown
  */
-void ChartHypothesis::CalcScore()
+void ChartHypothesis::Evaluate()
 {
+  const StaticData &staticData = StaticData::Instance();
   // total scores from prev hypos
   std::vector<const ChartHypothesis*>::iterator iter;
   for (iter = m_prevHypos.begin(); iter != m_prevHypos.end(); ++iter) {
@@ -151,25 +190,27 @@ void ChartHypothesis::CalcScore()
     m_scoreBreakdown.PlusEquals(scoreBreakdown);
   }
 
-  // translation models & word penalty
-  const ScoreComponentCollection &scoreBreakdown = GetCurrTargetPhrase().GetScoreBreakdown();
+  // scores from current translation rule. eg. translation models & word penalty
+  const ScoreComponentCollection &scoreBreakdown = GetTranslationOption().GetScores();
   m_scoreBreakdown.PlusEquals(scoreBreakdown);
-
-  //Add pre-computed features
-  m_manager.InsertPreCalculatedScores(GetCurrTargetPhrase(), &m_scoreBreakdown);
 
   // compute values of stateless feature functions that were not
   // cached in the translation option-- there is no principled distinction
   const std::vector<const StatelessFeatureFunction*>& sfs =
     StatelessFeatureFunction::GetStatelessFeatureFunctions();
   for (unsigned i = 0; i < sfs.size(); ++i) {
-    sfs[i]->EvaluateChart(ChartBasedFeatureContext(this),&m_scoreBreakdown);
+    if (! staticData.IsFeatureFunctionIgnored( *sfs[i] )) {
+      sfs[i]->EvaluateChart(*this,&m_scoreBreakdown);
+    }
   }
 
   const std::vector<const StatefulFeatureFunction*>& ffs =
     StatefulFeatureFunction::GetStatefulFeatureFunctions();
-  for (unsigned i = 0; i < ffs.size(); ++i)
-    m_ffStates[i] = ffs[i]->EvaluateChart(*this,i,&m_scoreBreakdown);
+  for (unsigned i = 0; i < ffs.size(); ++i) {
+    if (! staticData.IsFeatureFunctionIgnored( *ffs[i] )) {
+      m_ffStates[i] = ffs[i]->EvaluateChart(*this,i,&m_scoreBreakdown);
+    }
+  }
 
   m_totalScore	= m_scoreBreakdown.GetWeightedScore();
 }
@@ -222,7 +263,7 @@ void ChartHypothesis::CleanupArcList()
 
   if (!distinctNBest && m_arcList->size() > nBestSize) {
     // prune arc list only if there too many arcs
-    nth_element(m_arcList->begin()
+	NTH_ELEMENT4(m_arcList->begin()
                 , m_arcList->begin() + nBestSize - 1
                 , m_arcList->end()
                 , CompareChartChartHypothesisTotalScore());

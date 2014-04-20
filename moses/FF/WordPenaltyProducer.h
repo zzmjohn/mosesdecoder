@@ -10,8 +10,18 @@ class ScoreComponentCollection;
 
 class WordPenaltyProducer : public StatelessFeatureFunction
 {
+protected:
+  static WordPenaltyProducer *s_instance;
+
 public:
-  WordPenaltyProducer(const std::string &line) : StatelessFeatureFunction("WordPenalty",1, line) {}
+  static const WordPenaltyProducer& Instance() {
+    return *s_instance;
+  }
+  static WordPenaltyProducer& InstanceNonConst() {
+    return *s_instance;
+  }
+
+  WordPenaltyProducer(const std::string &line);
 
   bool IsUseable(const FactorMask &mask) const {
     return true;
@@ -21,6 +31,18 @@ public:
                         , const TargetPhrase &targetPhrase
                         , ScoreComponentCollection &scoreBreakdown
                         , ScoreComponentCollection &estimatedFutureScore) const;
+  void Evaluate(const Hypothesis& hypo,
+                ScoreComponentCollection* accumulator) const
+  {}
+  void EvaluateChart(const ChartHypothesis &hypo,
+                     ScoreComponentCollection* accumulator) const
+  {}
+  void Evaluate(const InputType &input
+                , const InputPath &inputPath
+                , const TargetPhrase &targetPhrase
+                , ScoreComponentCollection &scoreBreakdown
+                , ScoreComponentCollection *estimatedFutureScore = NULL) const
+  {}
 
 };
 

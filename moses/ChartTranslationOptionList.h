@@ -30,12 +30,17 @@ namespace Moses
 
 class TargetPhraseCollection;
 class WordsRange;
+class InputType;
+class InputPath;
+class ChartCellLabel;
 
 //! a vector of translations options for a specific range, in a specific sentence
 class ChartTranslationOptionList : public ChartParserCallback
 {
+  friend std::ostream& operator<<(std::ostream&, const ChartTranslationOptionList&);
+
 public:
-  ChartTranslationOptionList(size_t);
+  ChartTranslationOptionList(size_t ruleLimit, const InputType &input);
   ~ChartTranslationOptionList();
 
   const ChartTranslationOptions &Get(size_t i) const {
@@ -56,8 +61,11 @@ public:
     return m_size == 0;
   }
 
+  float GetBestScore(const ChartCellLabel *chartCell) const;
+
   void Clear();
   void ApplyThreshold();
+  void Evaluate(const InputType &input, const InputPath &inputPath);
 
 private:
   typedef std::vector<ChartTranslationOptions*> CollType;
@@ -74,6 +82,7 @@ private:
   size_t m_size;
   float m_scoreThreshold;
   const size_t m_ruleLimit;
+
 };
 
 }

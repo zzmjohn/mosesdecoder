@@ -17,9 +17,7 @@ class WordsRange;
 class DistortionScoreProducer : public StatefulFeatureFunction
 {
 public:
-  DistortionScoreProducer(const std::string &line)
-    : StatefulFeatureFunction("Distortion", 1, line)
-  {}
+  DistortionScoreProducer(const std::string &line);
 
   bool IsUseable(const FactorMask &mask) const {
     return true;
@@ -41,6 +39,19 @@ public:
     ScoreComponentCollection*) const {
     throw std::logic_error("DistortionScoreProducer not supported in chart decoder, yet");
   }
+
+  void Evaluate(const InputType &input
+                , const InputPath &inputPath
+                , const TargetPhrase &targetPhrase
+                , ScoreComponentCollection &scoreBreakdown
+                , ScoreComponentCollection *estimatedFutureScore = NULL) const
+  {}
+  void Evaluate(const Phrase &source
+                , const TargetPhrase &targetPhrase
+                , ScoreComponentCollection &scoreBreakdown
+                , ScoreComponentCollection &estimatedFutureScore) const
+  {}
+
 };
 }
 

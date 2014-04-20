@@ -90,10 +90,21 @@ public:
     throw std::logic_error("GlobalLexicalModelUnlimited not supported in chart decoder, yet");
   }
 
+  void Evaluate(const InputType &input
+                , const InputPath &inputPath
+                , const TargetPhrase &targetPhrase
+                , ScoreComponentCollection &scoreBreakdown
+                , ScoreComponentCollection *estimatedFutureScore = NULL) const
+  {}
+  void Evaluate(const Phrase &source
+                , const TargetPhrase &targetPhrase
+                , ScoreComponentCollection &scoreBreakdown
+                , ScoreComponentCollection &estimatedFutureScore) const
+  {}
+
   void AddFeature(ScoreComponentCollection* accumulator,
                   StringPiece sourceTrigger, StringPiece sourceWord, StringPiece targetTrigger,
                   StringPiece targetWord) const;
-
 };
 
 }

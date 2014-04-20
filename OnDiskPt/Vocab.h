@@ -42,11 +42,11 @@ protected:
 
 public:
   Vocab()
-    :m_nextId(1)
-  {}
+    :m_nextId(1) {
+  }
   UINT64 AddVocabId(const std::string &str);
   UINT64 GetVocabId(const std::string &str, bool &found) const;
-  const std::string &GetString(UINT32 vocabId) const {
+  const std::string &GetString(UINT64 vocabId) const {
     return m_lookup[vocabId];
   }
 

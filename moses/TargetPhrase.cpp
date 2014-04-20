@@ -21,7 +21,6 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include <algorithm>
 #include <stdlib.h>
-#include "util/check.hh"
 #include "util/exception.hh"
 #include "util/tokenize_piece.hh"
 
@@ -32,6 +31,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #include "ScoreComponentCollection.h"
 #include "Util.h"
 #include "AlignmentInfoCollection.h"
+#include "InputPath.h"
+#include "moses/TranslationModel/PhraseDictionary.h"
 
 using namespace std;
 
@@ -41,10 +42,10 @@ TargetPhrase::TargetPhrase( std::string out_string)
   :Phrase(0)
   , m_fullScore(0.0)
   , m_futureScore(0.0)
-  , m_sourcePhrase(0)
   , m_alignTerm(&AlignmentInfoCollection::Instance().GetEmptyAlignmentInfo())
   , m_alignNonTerm(&AlignmentInfoCollection::Instance().GetEmptyAlignmentInfo())
   , m_lhsTarget(NULL)
+  , m_ruleSource(NULL)
 {
 
   //ACAT
@@ -56,10 +57,10 @@ TargetPhrase::TargetPhrase()
   :Phrase()
   , m_fullScore(0.0)
   , m_futureScore(0.0)
-  ,m_sourcePhrase()
   , m_alignTerm(&AlignmentInfoCollection::Instance().GetEmptyAlignmentInfo())
   , m_alignNonTerm(&AlignmentInfoCollection::Instance().GetEmptyAlignmentInfo())
   , m_lhsTarget(NULL)
+  , m_ruleSource(NULL)
 {
 }
 
@@ -67,10 +68,10 @@ TargetPhrase::TargetPhrase(const Phrase &phrase)
   : Phrase(phrase)
   , m_fullScore(0.0)
   , m_futureScore(0.0)
-  , m_sourcePhrase()
   , m_alignTerm(&AlignmentInfoCollection::Instance().GetEmptyAlignmentInfo())
   , m_alignNonTerm(&AlignmentInfoCollection::Instance().GetEmptyAlignmentInfo())
   , m_lhsTarget(NULL)
+  , m_ruleSource(NULL)
 {
 }
 
@@ -78,17 +79,21 @@ TargetPhrase::TargetPhrase(const TargetPhrase &copy)
   : Phrase(copy)
   , m_fullScore(copy.m_fullScore)
   , m_futureScore(copy.m_futureScore)
-  , m_sourcePhrase(copy.m_sourcePhrase)
+  , m_scoreBreakdown(copy.m_scoreBreakdown)
   , m_alignTerm(copy.m_alignTerm)
   , m_alignNonTerm(copy.m_alignNonTerm)
-  , m_scoreBreakdown(copy.m_scoreBreakdown)
 {
   if (copy.m_lhsTarget) {
-    m_lhsTarget = new Word(copy.m_lhsTarget);
+    m_lhsTarget = new Word(*copy.m_lhsTarget);
   } else {
     m_lhsTarget = NULL;
   }
 
+  if (copy.m_ruleSource) {
+    m_ruleSource = new Phrase(*copy.m_ruleSource);
+  } else {
+    m_ruleSource = NULL;
+  }
 }
 
 TargetPhrase::~TargetPhrase()
@@ -96,6 +101,7 @@ TargetPhrase::~TargetPhrase()
   //cerr << "m_lhsTarget=" << m_lhsTarget << endl;
 
   delete m_lhsTarget;
+  delete m_ruleSource;
 }
 
 #ifdef HAVE_PROTOBUF
@@ -116,10 +122,13 @@ void TargetPhrase::Evaluate(const Phrase &source)
 void TargetPhrase::Evaluate(const Phrase &source, const std::vector<FeatureFunction*> &ffs)
 {
   if (ffs.size()) {
+    const StaticData &staticData = StaticData::Instance();
     ScoreComponentCollection futureScoreBreakdown;
     for (size_t i = 0; i < ffs.size(); ++i) {
       const FeatureFunction &ff = *ffs[i];
-      ff.Evaluate(source, *this, m_scoreBreakdown, futureScoreBreakdown);
+      if (! staticData.IsFeatureFunctionIgnored( ff )) {
+        ff.Evaluate(source, *this, m_scoreBreakdown, futureScoreBreakdown);
+      }
     }
 
     float weightedScore = m_scoreBreakdown.GetWeightedScore();
@@ -129,38 +138,30 @@ void TargetPhrase::Evaluate(const Phrase &source, const std::vector<FeatureFunct
   }
 }
 
-void TargetPhrase::Evaluate(const InputType &input)
+void TargetPhrase::Evaluate(const InputType &input, const InputPath &inputPath)
 {
   const std::vector<FeatureFunction*> &ffs = FeatureFunction::GetFeatureFunctions();
-
+  const StaticData &staticData = StaticData::Instance();
+  ScoreComponentCollection futureScoreBreakdown;
   for (size_t i = 0; i < ffs.size(); ++i) {
     const FeatureFunction &ff = *ffs[i];
-    ff.Evaluate(input, m_scoreBreakdown);
+    if (! staticData.IsFeatureFunctionIgnored( ff )) {
+      ff.Evaluate(input, inputPath, *this, m_scoreBreakdown, &futureScoreBreakdown);
+    }
   }
+  float weightedScore = m_scoreBreakdown.GetWeightedScore();
+  m_futureScore += futureScoreBreakdown.GetWeightedScore();
+  m_fullScore = weightedScore + m_futureScore;
 }
 
 void TargetPhrase::SetXMLScore(float score)
 {
   const StaticData &staticData = StaticData::Instance();
-  const FeatureFunction* prod = staticData.GetPhraseDictionaries()[0];
+  const FeatureFunction* prod = PhraseDictionary::GetColl()[0];
   size_t numScores = prod->GetNumScoreComponents();
   vector <float> scoreVector(numScores,score/numScores);
 
   m_scoreBreakdown.Assign(prod, scoreVector);
-}
-
-void TargetPhrase::SetInputScore(const Scores &scoreVector)
-{
-  //we use an existing score producer to figure out information for score setting (number of scores and weights)
-  const StaticData &staticData = StaticData::Instance();
-  const FeatureFunction* prod = staticData.GetPhraseDictionaries()[0];
-
-  //expand the input weight vector
-  CHECK(scoreVector.size() <= prod->GetNumScoreComponents());
-  Scores sizedScoreVector = scoreVector;
-  sizedScoreVector.resize(prod->GetNumScoreComponents(),0.0f);
-
-  m_scoreBreakdown.Assign(prod, sizedScoreVector);
 }
 
 void TargetPhrase::SetAlignmentInfo(const StringPiece &alignString)
@@ -175,7 +176,7 @@ void TargetPhrase::SetAlignmentInfo(const StringPiece &alignString)
     ++dash;
     size_t targetPos = strtoul(dash->data(), &endptr, 10);
     UTIL_THROW_IF(endptr != dash->data() + dash->size(), util::ErrnoException, "Error parsing alignment" << *dash);
-    UTIL_THROW_IF(++dash, util::Exception, "Extra gunk in alignment " << *token);
+    UTIL_THROW_IF2(++dash, "Extra gunk in alignment " << *token);
 
 
     if (GetWord(targetPos).IsNonTerminal()) {
@@ -215,14 +216,76 @@ void TargetPhrase::Merge(const TargetPhrase &copy, const std::vector<FactorType>
   m_fullScore += copy.m_fullScore;
 }
 
+void TargetPhrase::SetProperties(const StringPiece &str)
+{
+  if (str.size() == 0) {
+    return;
+  }
+
+  vector<string> toks;
+  TokenizeMultiCharSeparator(toks, str.as_string(), "{{");
+  for (size_t i = 0; i < toks.size(); ++i) {
+    string &tok = toks[i];
+    if (tok.empty()) {
+      continue;
+    }
+    size_t endPos = tok.rfind("}");
+
+    tok = tok.substr(0, endPos - 1);
+
+    vector<string> keyValue = TokenizeFirstOnly(tok, " ");
+    UTIL_THROW_IF2(keyValue.size() != 2,
+    		"Incorrect format of property: " << str);
+    SetProperty(keyValue[0], keyValue[1]);
+  }
+}
+
+void TargetPhrase::GetProperty(const std::string &key, std::string &value, bool &found) const
+{
+  std::map<std::string, std::string>::const_iterator iter;
+  iter = m_properties.find(key);
+  if (iter == m_properties.end()) {
+    found = false;
+  } else {
+    found = true;
+    value = iter->second;
+  }
+}
+
+void TargetPhrase::SetRuleSource(const Phrase &ruleSource) const
+{
+  if (m_ruleSource == NULL) {
+    m_ruleSource = new Phrase(ruleSource);
+  }
+}
+
+void swap(TargetPhrase &first, TargetPhrase &second)
+{
+  first.SwapWords(second);
+  std::swap(first.m_fullScore, second.m_fullScore);
+  std::swap(first.m_futureScore, second.m_futureScore);
+  swap(first.m_scoreBreakdown, second.m_scoreBreakdown);
+  std::swap(first.m_alignTerm, second.m_alignTerm);
+  std::swap(first.m_alignNonTerm, second.m_alignNonTerm);
+  std::swap(first.m_lhsTarget, second.m_lhsTarget);
+}
+
 TO_STRING_BODY(TargetPhrase);
 
 std::ostream& operator<<(std::ostream& os, const TargetPhrase& tp)
 {
+  if (tp.m_lhsTarget) {
+    os << *tp.m_lhsTarget<< " -> ";
+  }
   os << static_cast<const Phrase&>(tp) << ":" << flush;
   os << tp.GetAlignNonTerm() << flush;
   os << ": c=" << tp.m_fullScore << flush;
   os << " " << tp.m_scoreBreakdown << flush;
+
+  const Phrase *sourcePhrase = tp.GetRuleSource();
+  if (sourcePhrase) {
+    os << " sourcePhrase=" << *sourcePhrase << flush;
+  }
 
   return os;
 }

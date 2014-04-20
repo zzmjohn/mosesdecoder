@@ -190,7 +190,7 @@ std::string PhraseDecoder::MakeSourceKey(std::string &source)
   return source + m_separator;
 }
 
-TargetPhraseVectorPtr PhraseDecoder::CreateTargetPhraseCollection(const Phrase &sourcePhrase, bool topLevel)
+TargetPhraseVectorPtr PhraseDecoder::CreateTargetPhraseCollection(const Phrase &sourcePhrase, bool topLevel, bool eval)
 {
 
   // Not using TargetPhraseCollection avoiding "new" operator
@@ -234,7 +234,7 @@ TargetPhraseVectorPtr PhraseDecoder::CreateTargetPhraseCollection(const Phrase &
 
     // Decompress and decode target phrase collection
     TargetPhraseVectorPtr decodedPhraseColl =
-      DecodeCollection(tpv, encodedBitStream, sourcePhrase, topLevel);
+      DecodeCollection(tpv, encodedBitStream, sourcePhrase, topLevel, eval);
 
     return decodedPhraseColl;
   } else
@@ -243,7 +243,7 @@ TargetPhraseVectorPtr PhraseDecoder::CreateTargetPhraseCollection(const Phrase &
 
 TargetPhraseVectorPtr PhraseDecoder::DecodeCollection(
   TargetPhraseVectorPtr tpv, BitWrapper<> &encodedBitStream,
-  const Phrase &sourcePhrase, bool topLevel)
+  const Phrase &sourcePhrase, bool topLevel, bool eval)
 {
 
   bool extending = tpv->size();
@@ -279,7 +279,6 @@ TargetPhraseVectorPtr PhraseDecoder::DecodeCollection(
       tpv->push_back(TargetPhrase());
       targetPhrase = &tpv->back();
 
-      targetPhrase->SetSourcePhrase(sourcePhrase);
       alignment.clear();
       scores.clear();
 
@@ -397,7 +396,6 @@ TargetPhraseVectorPtr PhraseDecoder::DecodeCollection(
 
       if(scores.size() == m_numScoreComponent) {
         targetPhrase->GetScoreBreakdown().Assign(&m_phraseDictionary, scores);
-        targetPhrase->Evaluate(sourcePhrase);
 
         if(m_containsAlignmentInfo)
           state = Alignment;
@@ -417,6 +415,10 @@ TargetPhraseVectorPtr PhraseDecoder::DecodeCollection(
     if(state == Add) {
       if(m_phraseDictionary.m_useAlignmentInfo) {
         targetPhrase->SetAlignTerm(alignment);
+      }
+
+      if(eval) {
+        targetPhrase->Evaluate(sourcePhrase);
       }
 
       if(m_coding == PREnc) {

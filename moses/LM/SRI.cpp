@@ -19,7 +19,6 @@ License along with this library; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 ***********************************************************************/
 
-#include "util/check.hh"
 #include <limits>
 #include <iostream>
 #include <fstream>
@@ -31,6 +30,21 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #include "moses/Phrase.h"
 #include "moses/StaticData.h"
 
+// By default, SRILM defines a function called zopen.
+//
+// However, on Mac OS X (and possibly other BSDs),
+// <stdio.h> already defines a zopen function.
+//
+// To resolve this conflict, SRILM checks to see if HAVE_ZOPEN is defined.
+// If it is, SRILM will rename its zopen function as my_zopen.
+//
+// So, before importing any SRILM headers,
+// it is important to define HAVE_ZOPEN if we are on an Apple OS:
+//
+#ifdef __APPLE__
+#define HAVE_ZOPEN
+#endif
+
 #include "Vocab.h"
 #include "Ngram.h"
 
@@ -39,24 +53,11 @@ using namespace std;
 namespace Moses
 {
 LanguageModelSRI::LanguageModelSRI(const std::string &line)
-  :LanguageModelSingleFactor("SRILM", line)
+  :LanguageModelSingleFactor(line)
   ,m_srilmVocab(0)
   ,m_srilmModel(0)
 {
-  for (size_t i = 0; i < m_args.size(); ++i) {
-    const vector<string> &args = m_args[i];
-
-    if (args[0] == "factor") {
-      m_factorType = Scan<FactorType>(args[1]);
-    } else if (args[0] == "order") {
-      m_nGramOrder = Scan<size_t>(args[1]);
-    } else if (args[0] == "path") {
-      m_filePath = args[1];
-    } else {
-      throw "Unknown argument " + args[0];
-    }
-  }
-
+  ReadParameters();
 }
 
 LanguageModelSRI::~LanguageModelSRI()
@@ -160,7 +161,8 @@ LMResult LanguageModelSRI::GetValue(const vector<const Word*> &contextFactor, St
   }
   ngram[count] = Vocab_None;
 
-  CHECK((*contextFactor[count-1])[factorType] != NULL);
+  UTIL_THROW_IF2((*contextFactor[count-1])[factorType] == NULL,
+		  "No factor " << factorType << " at position " << (count-1));
   // call sri lm fn
   VocabIndex lmId = GetLmID((*contextFactor[count-1])[factorType]);
   ret = GetValue(lmId, ngram+1);

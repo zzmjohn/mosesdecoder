@@ -34,11 +34,21 @@
 #include "moses/TranslationModel/RuleTable/LoaderFactory.h"
 #include "moses/TranslationModel/RuleTable/Loader.h"
 #include "moses/TranslationModel/CYKPlusParser/ChartRuleLookupManagerMemory.h"
+#include "moses/InputPath.h"
 
 using namespace std;
 
 namespace Moses
 {
+PhraseDictionaryMemory::PhraseDictionaryMemory(const std::string &line)
+  : RuleTableTrie(line)
+{
+  ReadParameters();
+
+  // caching for memory pt is pointless
+  m_maxCacheSize = 0;
+
+}
 
 TargetPhraseCollection &PhraseDictionaryMemory::GetOrCreateTargetPhraseCollection(
   const Phrase &source
@@ -46,11 +56,16 @@ TargetPhraseCollection &PhraseDictionaryMemory::GetOrCreateTargetPhraseCollectio
   , const Word *sourceLHS)
 {
   PhraseDictionaryNodeMemory &currNode = GetOrCreateNode(source, target, sourceLHS);
-  return currNode.GetOrCreateTargetPhraseCollection();
+  return currNode.GetTargetPhraseCollection();
 }
 
-const TargetPhraseCollection *PhraseDictionaryMemory::GetTargetPhraseCollection(const Phrase& source) const
+const TargetPhraseCollection*
+PhraseDictionaryMemory::
+GetTargetPhraseCollectionLEGACY(const Phrase& sourceOrig) const
 {
+  Phrase source(sourceOrig);
+  source.OnlyTheseFactors(m_inputFactors);
+
   // exactly like CreateTargetPhraseCollection, but don't create
   const size_t size = source.GetSize();
 
@@ -62,14 +77,7 @@ const TargetPhraseCollection *PhraseDictionaryMemory::GetTargetPhraseCollection(
       return NULL;
   }
 
-  const TargetPhraseCollection *coll = currNode->GetTargetPhraseCollection();
-  /*
-  if (coll) {
-    cerr << "source=" << source << endl
-        << *coll << endl;
-  }
-  */
-  return coll;
+  return &currNode->GetTargetPhraseCollection();
 }
 
 PhraseDictionaryNodeMemory &PhraseDictionaryMemory::GetOrCreateNode(const Phrase &source
@@ -89,39 +97,80 @@ PhraseDictionaryNodeMemory &PhraseDictionaryMemory::GetOrCreateNode(const Phrase
       // indexed by source label 1st
       const Word &sourceNonTerm = word;
 
-      CHECK(iterAlign != alignmentInfo.end());
-      CHECK(iterAlign->first == pos);
+      UTIL_THROW_IF2(iterAlign == alignmentInfo.end(),
+    		  "No alignment for non-term at position " << pos);
+      UTIL_THROW_IF2(iterAlign->first != pos,
+    		  "Alignment info incorrect at position " << pos);
+
       size_t targetNonTermInd = iterAlign->second;
       ++iterAlign;
       const Word &targetNonTerm = target.GetWord(targetNonTermInd);
-
+#if defined(UNLABELLED_SOURCE)
+      currNode = currNode->GetOrCreateNonTerminalChild(targetNonTerm);
+#else
       currNode = currNode->GetOrCreateChild(sourceNonTerm, targetNonTerm);
+#endif
     } else {
       currNode = currNode->GetOrCreateChild(word);
     }
 
-    CHECK(currNode != NULL);
+    UTIL_THROW_IF2(currNode == NULL,
+    		"Node not found at position " << pos);
   }
 
   // finally, the source LHS
   //currNode = currNode->GetOrCreateChild(sourceLHS);
-  //CHECK(currNode != NULL);
-
 
   return *currNode;
 }
 
 ChartRuleLookupManager *PhraseDictionaryMemory::CreateRuleLookupManager(
-  const InputType &sentence,
-  const ChartCellCollectionBase &cellCollection)
+  const ChartParser &parser,
+  const ChartCellCollectionBase &cellCollection,
+  std::size_t /*maxChartSpan */)
 {
-  return new ChartRuleLookupManagerMemory(sentence, cellCollection, *this);
+  return new ChartRuleLookupManagerMemory(parser, cellCollection, *this);
 }
 
 void PhraseDictionaryMemory::SortAndPrune()
 {
   if (GetTableLimit()) {
     m_collection.Sort(GetTableLimit());
+  }
+}
+
+void
+PhraseDictionaryMemory::
+GetTargetPhraseCollectionBatch(const InputPathList &inputPathQueue) const
+{
+  InputPathList::const_iterator iter;
+  for (iter = inputPathQueue.begin(); iter != inputPathQueue.end(); ++iter) {
+    InputPath &node = **iter;
+    const Phrase &phrase = node.GetPhrase();
+    const InputPath *prevPath = node.GetPrevPath();
+
+    const PhraseDictionaryNodeMemory *prevPtNode = NULL;
+
+    if (prevPath) {
+      prevPtNode = static_cast<const PhraseDictionaryNodeMemory*>(prevPath->GetPtNode(*this));
+    } else {
+      // Starting subphrase.
+      assert(phrase.GetSize() == 1);
+      prevPtNode = &GetRootNode();
+    }
+
+    if (prevPtNode) {
+      Word lastWord = phrase.GetWord(phrase.GetSize() - 1);
+      lastWord.OnlyTheseFactors(m_inputFactors);
+
+      const PhraseDictionaryNodeMemory *ptNode = prevPtNode->GetChild(lastWord);
+      if (ptNode) {
+        const TargetPhraseCollection &targetPhrases = ptNode->GetTargetPhraseCollection();
+        node.SetTargetPhrases(*this, &targetPhrases, ptNode);
+      } else {
+        node.SetTargetPhrases(*this, NULL, NULL);
+      }
+    }
   }
 }
 
@@ -135,8 +184,13 @@ ostream& operator<<(ostream& out, const PhraseDictionaryMemory& phraseDict)
 
   const PhraseDictionaryNodeMemory &coll = phraseDict.m_collection;
   for (NonTermMap::const_iterator p = coll.m_nonTermMap.begin(); p != coll.m_nonTermMap.end(); ++p) {
+#if defined(UNLABELLED_SOURCE)
+    const Word &targetNonTerm = p->first;
+    out << targetNonTerm;
+#else
     const Word &sourceNonTerm = p->first.first;
     out << sourceNonTerm;
+#endif
   }
   for (TermMap::const_iterator p = coll.m_sourceTermMap.begin(); p != coll.m_sourceTermMap.end(); ++p) {
     const Word &sourceTerm = p->first;

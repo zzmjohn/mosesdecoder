@@ -15,18 +15,26 @@
 #include "moses/UserMessage.h"
 #include "Loader.h"
 #include "LoaderFactory.h"
+#include "util/exception.hh"
 
 using namespace std;
 
 namespace Moses
 {
 PhraseDictionaryALSuffixArray::PhraseDictionaryALSuffixArray(const std::string &line)
-  : PhraseDictionaryMemory("PhraseDictionaryALSuffixArray", line)
+  : PhraseDictionaryMemory(1, line)
 {
   const StaticData &staticData = StaticData::Instance();
   if (staticData.ThreadCount() > 1) {
     throw runtime_error("Suffix array implementation is not threadsafe");
   }
+
+  ReadParameters();
+}
+
+void PhraseDictionaryALSuffixArray::Load()
+{
+  SetFeaturesToApply();
 }
 
 void PhraseDictionaryALSuffixArray::InitializeForInput(InputType const& source)
@@ -41,12 +49,13 @@ void PhraseDictionaryALSuffixArray::InitializeForInput(InputType const& source)
   bool ret = loader->Load(m_input, m_output, grammarFile, m_tableLimit,
                           *this);
 
-  CHECK(ret);
+  UTIL_THROW_IF2(ret == NULL,
+		  "Rules not successfully loaded for sentence id " << translationId);
 }
 
 void PhraseDictionaryALSuffixArray::CleanUpAfterSentenceProcessing(const InputType &source)
 {
-  m_collection.Clear();
+  m_collection.Remove();
 }
 
 }

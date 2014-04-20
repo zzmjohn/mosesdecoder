@@ -31,9 +31,11 @@
 namespace Moses
 {
 
+class ChartKBestExtractor;
 class ChartHypothesis;
 class ChartManager;
 class RuleCubeItem;
+class FFState;
 
 typedef std::vector<ChartHypothesis*> ChartArcList;
 
@@ -49,7 +51,7 @@ protected:
   static ObjectPool<ChartHypothesis> s_objectPool;
 #endif
 
-  const TargetPhrase &m_targetPhrase;
+  boost::shared_ptr<ChartTranslationOption> m_transOpt;
 
   WordsRange					m_currSourceWordsRange;
   std::vector<const FFState*> m_ffStates; /*! stateful feature function states */
@@ -91,6 +93,9 @@ public:
   }
 #endif
 
+  //! only used by ChartKBestExtractor
+  ChartHypothesis(const ChartHypothesis &, const ChartKBestExtractor &);
+
   ChartHypothesis(const ChartTranslationOptions &, const RuleCubeItem &item,
                   ChartManager &manager);
 
@@ -100,9 +105,13 @@ public:
     return m_id;
   }
 
+  const ChartTranslationOption &GetTranslationOption()const {
+    return *m_transOpt;
+  }
+
   //! Get the rule that created this hypothesis
   const TargetPhrase &GetCurrTargetPhrase()const {
-    return m_targetPhrase;
+    return m_transOpt->GetPhrase();
   }
 
   //! the source range that this hypothesis spans
@@ -125,12 +134,12 @@ public:
     return m_manager;
   }
 
-  void CreateOutputPhrase(Phrase &outPhrase) const;
+  void GetOutputPhrase(Phrase &outPhrase) const;
   Phrase GetOutputPhrase() const;
 
   int RecombineCompare(const ChartHypothesis &compare) const;
 
-  void CalcScore();
+  void Evaluate();
 
   void AddArc(ChartHypothesis *loserHypo);
   void CleanupArcList();

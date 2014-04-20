@@ -2,8 +2,9 @@
 // vim:tabstop=2
 #include "moses/FeatureVector.h"
 #include "moses/TranslationModel/PhraseDictionaryTree.h"
+#include "util/exception.hh"
+
 #include <map>
-#include "util/check.hh"
 #include <sstream>
 #include <iostream>
 #include <fstream>
@@ -41,8 +42,8 @@ public:
   TgtCand(const IPhrase& a, const Scores& b , const std::string& alignment)
     : e(a)
     , sc(b)
-    , m_alignment(alignment)
-  {}
+    , m_alignment(alignment) {
+  }
 
   TgtCand(const IPhrase& a,const Scores& b) : e(a),sc(b) {}
 
@@ -106,7 +107,7 @@ public:
   }
 
   void SetFeatures(const IPhrase& names, const std::vector<FValue>& values) {
-    CHECK(names.size() == values.size());
+    UTIL_THROW_IF2(names.size() != values.size(), "Error");
     fnames = names;
     fvalues = values;
   }
@@ -218,7 +219,7 @@ public:
     if(f.empty()) return;
     if(f[0]>=data.size()) return;
     if(!data[f[0]]) return;
-    CHECK(data[f[0]]->findKey(f[0])<data[f[0]]->size());
+    assert(data[f[0]]->findKey(f[0])<data[f[0]]->size());
     OFF_T tCandOffset=data[f[0]]->find(f);
     if(tCandOffset==InvalidOffT) return;
     fSeek(ot,tCandOffset);
@@ -232,7 +233,8 @@ public:
   typedef PhraseDictionaryTree::PrefixPtr PPtr;
 
   void GetTargetCandidates(PPtr p,TgtCands& tgtCands) {
-    CHECK(p);
+    UTIL_THROW_IF2(p == NULL, "Error");
+
     if(p.imp->isRoot()) return;
     OFF_T tCandOffset=p.imp->ptr()->getData(p.imp->idx);
     if(tCandOffset==InvalidOffT) return;
@@ -246,23 +248,28 @@ public:
   void PrintTgtCand(const TgtCands& tcands,std::ostream& out) const;
 
   // convert target candidates from internal data structure to the external one
-  void ConvertTgtCand(const TgtCands& tcands,std::vector<StringTgtCand>& rv,
+  void ConvertTgtCand(const TgtCands& tcands,std::vector<StringTgtCand>& extTgtCands,
                       std::vector<std::string>* wa) const {
-    for(TgtCands::const_iterator i=tcands.begin(); i!=tcands.end(); ++i) {
-      rv.push_back(StringTgtCand());
-      const IPhrase& iphrase=i->GetPhrase();
+    extTgtCands.reserve(tcands.size());
+    for(TgtCands::const_iterator iter=tcands.begin(); iter!=tcands.end(); ++iter) {
+      const TgtCand &intTgtCand = *iter;
 
-      rv.back().tokens.reserve(iphrase.size());
+      extTgtCands.push_back(StringTgtCand());
+      StringTgtCand &extTgtCand = extTgtCands.back();
+
+      const IPhrase& iphrase = intTgtCand.GetPhrase();
+
+      extTgtCand.tokens.reserve(iphrase.size());
       for(size_t j=0; j<iphrase.size(); ++j) {
-        rv.back().tokens.push_back(&tv.symbol(iphrase[j]));
+        extTgtCand.tokens.push_back(&tv.symbol(iphrase[j]));
       }
-      rv.back().scores = i->GetScores();
-      const IPhrase& fnames = i->GetFeatureNames();
+      extTgtCand.scores = intTgtCand.GetScores();
+      const IPhrase& fnames = intTgtCand.GetFeatureNames();
       for (size_t j = 0; j < fnames.size(); ++j) {
-        rv.back().fnames.push_back(&tv.symbol(fnames[j]));
+        extTgtCand.fnames.push_back(&tv.symbol(fnames[j]));
       }
-      rv.back().fvalues = i->GetFeatureValues();
-      if (wa) wa->push_back(i->GetAlignment());
+      extTgtCand.fvalues = intTgtCand.GetFeatureValues();
+      if (wa) wa->push_back(intTgtCand.GetAlignment());
     }
   }
 
@@ -271,7 +278,8 @@ public:
   }
 
   PPtr Extend(PPtr p,const std::string& w) {
-    CHECK(p);
+	UTIL_THROW_IF2(p == NULL, "Error");
+
     if(w.empty() || w==EPSILON) return p;
 
     LabelId wi=sv.index(w);
@@ -280,7 +288,8 @@ public:
     else if(p.imp->isRoot()) {
       if(wi<data.size() && data[wi]) {
         const void* ptr = data[wi]->findKeyPtr(wi);
-        CHECK(ptr);
+        UTIL_THROW_IF2(ptr == NULL, "Error");
+
         return PPtr(pPool.get(PPimp(data[wi],data[wi]->findKey(wi),0)));
       }
     } else if(PTF const* nextP=p.imp->ptr()->getPtr(p.imp->idx)) {
@@ -371,10 +380,8 @@ PhraseDictionaryTree::PhraseDictionaryTree()
   : imp(new PDTimp)
 {
   if(sizeof(OFF_T)!=8) {
-    TRACE_ERR("ERROR: size of type 'OFF_T' has to be 64 bit!\n"
-              "In gcc, use compiler settings '-D_FILE_OFFSET_BITS=64 -D_LARGE_FILES'\n"
-              " -> abort \n\n");
-    abort();
+	UTIL_THROW2("ERROR: size of type 'OFF_T' has to be 64 bit!\n"
+              "In gcc, use compiler settings '-D_FILE_OFFSET_BITS=64 -D_LARGE_FILES'\n");
   }
 }
 
@@ -492,14 +499,12 @@ int PhraseDictionaryTree::Create(std::istream& inFile,const std::string& out)
     if (numElement == NOT_FOUND) {
       // init numElement
       numElement = tokens.size();
-      CHECK(numElement >= 3);
+      UTIL_THROW_IF2(numElement < (PrintWordAlignment()?4:3),
+    		  "Format error");
     }
 
     if (tokens.size() != numElement) {
-      std::stringstream strme;
-      strme << "Syntax error at line " << lnc  << " : " << line;
-      UserMessage::Add(strme.str());
-      abort();
+      UTIL_THROW2("Syntax error at line " << lnc  << " : " << line);
     }
 
     const std::string &sourcePhraseString	=tokens[0]
@@ -539,13 +544,13 @@ int PhraseDictionaryTree::Create(std::istream& inFile,const std::string& out)
       ++count;
       currF=f;
       // insert src phrase in prefix tree
-      CHECK(psa);
+      UTIL_THROW_IF2(psa == NULL, "Error");
+
       PSA::Data& d=psa->insert(f);
       if(d==InvalidOffT) d=fTell(ot);
       else {
-        TRACE_ERR("ERROR: source phrase already inserted (A)!\nline(" << lnc << "): '"
-                  <<line<<"'\nf: "<<f<<"\n");
-        abort();
+    	UTIL_THROW2("ERROR: source phrase already inserted (A)!\nline(" << lnc << "): '"
+                  <<line);
       }
     }
 
@@ -554,9 +559,8 @@ int PhraseDictionaryTree::Create(std::istream& inFile,const std::string& out)
     if (!sparseFeatureString.empty()) {
       std::vector<std::string> sparseTokens = Tokenize(sparseFeatureString);
       if (sparseTokens.size() % 2 != 0) {
-        TRACE_ERR("ERROR: incorrectly formatted sparse feature string: " <<
-                  sparseFeatureString << std::endl);
-        abort();
+    	UTIL_THROW2("ERROR: incorrectly formatted sparse feature string: " <<
+                  sparseFeatureString);
       }
       for (size_t i = 0; i < sparseTokens.size(); i+=2) {
         fnames.push_back(imp->tv.add(sparseTokens[i]));
@@ -592,17 +596,18 @@ int PhraseDictionaryTree::Create(std::istream& inFile,const std::string& out)
       }
 
       // insert src phrase in prefix tree
-      CHECK(psa);
+      UTIL_THROW_IF2(psa == NULL, "Error");
+
       PSA::Data& d=psa->insert(f);
       if(d==InvalidOffT) d=fTell(ot);
       else {
-        TRACE_ERR("ERROR: xsource phrase already inserted (B)!\nline(" << lnc << "): '"
-                  <<line<<"'\nf: "<<f<<"\n");
-        abort();
+    	UTIL_THROW2("ERROR: xsource phrase already inserted (B)!\nline(" << lnc << "): '"
+                  <<line);
       }
     }
     tgtCands.push_back(TgtCand(e,sc, alignmentString));
-    CHECK(currFirstWord!=InvalidLabelId);
+    UTIL_THROW_IF2(currFirstWord == InvalidLabelId,
+    		"Uninitialize word");
     tgtCands.back().SetFeatures(fnames, fvalues);
   }
   if (PrintWordAlignment())

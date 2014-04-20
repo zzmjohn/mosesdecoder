@@ -44,7 +44,7 @@
 #include <boost/thread/shared_mutex.hpp>
 #endif
 
-#include "util/check.hh"
+#include "util/exception.hh"
 #include "util/string_piece.hh"
 
 namespace Moses
@@ -264,6 +264,7 @@ public:
 #endif
 
 private:
+  friend void swap(FVector &first, FVector &second);
 
   /** Internal get and set. */
   const FValue& get(const FName& name) const;
@@ -298,7 +299,7 @@ private:
     ar >> names;
     ar >> values;
     ar >> m_coreFeatures;
-    CHECK(names.size() == values.size());
+    UTIL_THROW_IF2(names.size() != values.size(), "Error");
     for (size_t i = 0; i < names.size(); ++i) {
       set(FName(names[i]), values[i]);
     }
@@ -309,6 +310,12 @@ private:
 #endif
 
 };
+
+inline void swap(FVector &first, FVector &second)
+{
+  swap(first.m_features, second.m_features);
+  swap(first.m_coreFeatures, second.m_coreFeatures);
+}
 
 std::ostream& operator<<( std::ostream& out, const FVector& fv);
 //Element-wise operations
@@ -369,9 +376,6 @@ public:
   FValue operator -=(FValue lhs) {
     return (m_fv->m_features[m_name] -= lhs);
   }
-
-private:
-  FValue m_tmp;
 
 private:
   FVector* m_fv;

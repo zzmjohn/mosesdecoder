@@ -1,3 +1,4 @@
+#pragma once
 /***********************************************************************
   Moses - factored phrase-based language decoder
   Copyright (C) 2010 University of Edinburgh
@@ -19,9 +20,8 @@
 
 /* Created by Rohit Gupta, CDAC, Mumbai, India on 18 July, 2012*/
 
-#pragma once
-#ifndef PHRASEEXTRACTIONOPTIONS_H_INCLUDED_
-#define PHRASEEXTRACTIONOPTIONS_H_INCLUDED_
+#include <string>
+#include <vector>
 
 namespace MosesTraining
 {
@@ -33,7 +33,10 @@ class PhraseExtractionOptions
 {
 
 public:
-  const int maxPhraseLength;
+  int maxPhraseLength;
+  int minPhraseLength;
+  std::string separator;
+
 private:
   bool allModelsOutputFlag;
   bool wordModel;
@@ -48,10 +51,16 @@ private:
   bool onlyOutputSpanInfo;
   bool gzOutput;
   std::string instanceWeightsFile; //weights for each sentence
+  bool flexScoreFlag;
 
 public:
+  std::vector<std::string> placeholders;
+  bool debug;
+
   PhraseExtractionOptions(const int initmaxPhraseLength):
     maxPhraseLength(initmaxPhraseLength),
+    minPhraseLength(3),
+    separator("|||"),
     allModelsOutputFlag(false),
     wordModel(false),
     wordType(REO_MSD),
@@ -63,7 +72,10 @@ public:
     translationFlag(true),
     includeSentenceIdFlag(false),
     onlyOutputSpanInfo(false),
-    gzOutput(false) {}
+    gzOutput(false),
+	flexScoreFlag(false), 
+	debug(false)
+{}
 
   //functions for initialization of options
   void initAllModelsOutputFlag(const bool initallModelsOutputFlag) {
@@ -104,6 +116,9 @@ public:
   }
   void initInstanceWeightsFile(const char* initInstanceWeightsFile) {
     instanceWeightsFile = std::string(initInstanceWeightsFile);
+  }
+  void initFlexScoreFlag(const bool initflexScoreFlag) {
+    flexScoreFlag=initflexScoreFlag;
   }
 
   // functions for getting values
@@ -146,8 +161,10 @@ public:
   std::string getInstanceWeightsFile() const {
     return instanceWeightsFile;
   }
+  bool isFlexScoreFlag() const {
+    return flexScoreFlag;
+  }
 };
 
 }
 
-#endif

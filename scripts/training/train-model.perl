@@ -31,18 +31,17 @@ my($_EXTERNAL_BINDIR, $_ROOT_DIR, $_CORPUS_DIR, $_GIZA_E2F, $_GIZA_F2E, $_MODEL_
    $_DECODING_GRAPH_BACKOFF,
    $_DECODING_STEPS, $_PARALLEL, $_FACTOR_DELIMITER, @_PHRASE_TABLE,
    @_REORDERING_TABLE, @_GENERATION_TABLE, @_GENERATION_TYPE, $_GENERATION_CORPUS,
-   $_DONT_ZIP,  $_MGIZA, $_MGIZA_CPUS, $_SNT2COOC, $_HMM_ALIGN, $_CONFIG,
-   $_HIERARCHICAL,$_XML,$_SOURCE_SYNTAX,$_TARGET_SYNTAX,$_GLUE_GRAMMAR,$_GLUE_GRAMMAR_FILE,$_UNKNOWN_WORD_LABEL_FILE,$_GHKM,$_PCFG,@_EXTRACT_OPTIONS,@_SCORE_OPTIONS,
-   $_ALT_DIRECT_RULE_SCORE_1, $_ALT_DIRECT_RULE_SCORE_2,
+   $_DONT_ZIP,  $_MGIZA, $_MGIZA_CPUS, $_SNT2COOC, $_HMM_ALIGN, $_CONFIG, $_OSM, $_OSM_FACTORS, $_POST_DECODING_TRANSLIT, $_TRANSLITERATION_PHRASE_TABLE,
+   $_HIERARCHICAL,$_XML,$_SOURCE_SYNTAX,$_TARGET_SYNTAX,$_GLUE_GRAMMAR,$_GLUE_GRAMMAR_FILE,$_UNKNOWN_WORD_LABEL_FILE,$_GHKM,$_GHKM_TREE_FRAGMENTS,$_PCFG,@_EXTRACT_OPTIONS,@_SCORE_OPTIONS,
+   $_ALT_DIRECT_RULE_SCORE_1, $_ALT_DIRECT_RULE_SCORE_2, $_UNKNOWN_WORD_SOFT_MATCHES_FILE,
    $_OMIT_WORD_ALIGNMENT,$_FORCE_FACTORED_FILENAMES,
    $_MEMSCORE, $_FINAL_ALIGNMENT_MODEL,
    $_CONTINUE,$_MAX_LEXICAL_REORDERING,$_DO_STEPS,
    @_ADDITIONAL_INI,$_ADDITIONAL_INI_FILE,
    @_BASELINE_ALIGNMENT_MODEL, $_BASELINE_EXTRACT, $_BASELINE_ALIGNMENT,
-   $_DICTIONARY, $_SPARSE_PHRASE_FEATURES, $_EPPEX, $_INSTANCE_WEIGHTS_FILE, $_LMODEL_OOV_FEATURE, $_NUM_LATTICE_FEATURES, $IGNORE);
+   $_DICTIONARY, $_SPARSE_PHRASE_FEATURES, $_EPPEX, $_INSTANCE_WEIGHTS_FILE, $_LMODEL_OOV_FEATURE, $_NUM_LATTICE_FEATURES, $IGNORE, $_FLEXIBILITY_SCORE, $_EXTRACT_COMMAND);
 my $_BASELINE_CORPUS = "";
 my $_CORES = 1;
-
 my $debug = 0; # debug this script, do not delete any files in debug mode
 
 $_HELP = 1
@@ -108,7 +107,9 @@ $_HELP = 1
 		       'glue-grammar' => \$_GLUE_GRAMMAR,
 		       'glue-grammar-file=s' => \$_GLUE_GRAMMAR_FILE,
 		       'unknown-word-label-file=s' => \$_UNKNOWN_WORD_LABEL_FILE,
+		       'unknown-word-soft-matches-file=s' => \$_UNKNOWN_WORD_SOFT_MATCHES_FILE, # give dummy label to unknown word, and allow soft matches to all other labels (with cost determined by sparse features)
 		       'ghkm' => \$_GHKM,
+		       'ghkm-tree-fragments' => \$_GHKM_TREE_FRAGMENTS,
 		       'pcfg' => \$_PCFG,
 		       'alt-direct-rule-score-1' => \$_ALT_DIRECT_RULE_SCORE_1,
 		       'alt-direct-rule-score-2' => \$_ALT_DIRECT_RULE_SCORE_2,
@@ -119,6 +120,10 @@ $_HELP = 1
 		       'xml' => \$_XML,
 		       'no-word-alignment' => \$_OMIT_WORD_ALIGNMENT,
 		       'config=s' => \$_CONFIG,
+		       'osm-model=s' => \$_OSM,
+			'osm-setting=s' => \$_OSM_FACTORS,
+			'post-decoding-translit=s' => \$_POST_DECODING_TRANSLIT,
+			'transliteration-phrase-table=s' => \$_TRANSLITERATION_PHRASE_TABLE,		
 		       'max-lexical-reordering' => \$_MAX_LEXICAL_REORDERING,
 		       'do-steps=s' => \$_DO_STEPS,
 		       'memscore:s' => \$_MEMSCORE,
@@ -136,6 +141,8 @@ $_HELP = 1
 		       'instance-weights-file=s' => \$_INSTANCE_WEIGHTS_FILE,
 		       'lmodel-oov-feature' => \$_LMODEL_OOV_FEATURE,
 		       'num-lattice-features=i' => \$_NUM_LATTICE_FEATURES,
+		       'flexibility-score' => \$_FLEXIBILITY_SCORE,
+		       'extract-command=s' => \$_EXTRACT_COMMAND,
                );
 
 if ($_HELP) {
@@ -299,11 +306,20 @@ my $__SORT_PARALLEL = "";
 $__SORT_PARALLEL = "--parallel $_SORT_PARALLEL" if $_SORT_PARALLEL;
 
 # supporting scripts/binaries from this package
-my $PHRASE_EXTRACT = "$SCRIPTS_ROOTDIR/../bin/extract";
+my $PHRASE_EXTRACT;
+if (defined($_EXTRACT_COMMAND)) {
+  $PHRASE_EXTRACT = "$SCRIPTS_ROOTDIR/../bin/$_EXTRACT_COMMAND";
+}
+else {
+  $PHRASE_EXTRACT = "$SCRIPTS_ROOTDIR/../bin/extract";
+}
 $PHRASE_EXTRACT = "$SCRIPTS_ROOTDIR/generic/extract-parallel.perl $_CORES $SPLIT_EXEC \"$SORT_EXEC $__SORT_BUFFER_SIZE $__SORT_BATCH_SIZE $__SORT_COMPRESS $__SORT_PARALLEL\" $PHRASE_EXTRACT";
 
 my $RULE_EXTRACT;
-if (defined($_GHKM)) {
+if (defined($_EXTRACT_COMMAND)) {
+  $RULE_EXTRACT = "$SCRIPTS_ROOTDIR/../bin/$_EXTRACT_COMMAND";
+}
+elsif (defined($_GHKM)) {
   $RULE_EXTRACT = "$SCRIPTS_ROOTDIR/../bin/extract-ghkm";
 }
 else {
@@ -321,6 +337,7 @@ my $PHRASE_SCORE = "$SCRIPTS_ROOTDIR/../bin/score";
 $PHRASE_SCORE = "$SCRIPTS_ROOTDIR/generic/score-parallel.perl $_CORES \"$SORT_EXEC $__SORT_BUFFER_SIZE $__SORT_BATCH_SIZE $__SORT_COMPRESS $__SORT_PARALLEL\" $PHRASE_SCORE";
 
 my $PHRASE_CONSOLIDATE = "$SCRIPTS_ROOTDIR/../bin/consolidate";
+my $FLEX_SCORER = "$SCRIPTS_ROOTDIR/training/flexibility_score.py";
 
 # utilities
 my $ZCAT = "gzip -cd";
@@ -737,7 +754,7 @@ sub reduce_factors {
         $firstline =~ s/^\s*//;
         $firstline =~ s/\s.*//;
         # count factors
-        my $maxfactorindex = $firstline =~ tr/|/|/;
+        my $maxfactorindex = $firstline =~ tr/$___FACTOR_DELIMITER/$___FACTOR_DELIMITER/;
         if (join(",", @INCLUDE) eq join(",", 0..$maxfactorindex)) {
           # create just symlink; preserving compression
           my $realfull = $full;
@@ -770,7 +787,7 @@ sub reduce_factors {
 	    $first = 0;
 	    my $first_factor = 1;
             foreach my $outfactor (@INCLUDE) {
-              print OUT "|" unless $first_factor;
+              print OUT $___FACTOR_DELIMITER unless $first_factor;
               $first_factor = 0;
               my $out = $FACTOR[$outfactor];
               die "ERROR: Couldn't find factor $outfactor in token \"$_\" in $full LINE $nr" if !defined $out;
@@ -1400,9 +1417,11 @@ sub extract_phrase {
         $cmd = "$RULE_EXTRACT $alignment_file_e $alignment_file_f $alignment_file_a $extract_file$suffix";
         $cmd .= " --GlueGrammar $___GLUE_GRAMMAR_FILE" if $_GLUE_GRAMMAR;
         $cmd .= " --UnknownWordLabel $_UNKNOWN_WORD_LABEL_FILE" if $_TARGET_SYNTAX && defined($_UNKNOWN_WORD_LABEL_FILE);
+        $cmd .= " --UnknownWordSoftMatches $_UNKNOWN_WORD_SOFT_MATCHES_FILE" if $_TARGET_SYNTAX && defined($_UNKNOWN_WORD_SOFT_MATCHES_FILE);
         $cmd .= " --PCFG" if $_PCFG;
         $cmd .= " --UnpairedExtractFormat" if $_ALT_DIRECT_RULE_SCORE_1 || $_ALT_DIRECT_RULE_SCORE_2;
         $cmd .= " --ConditionOnTargetLHS" if $_ALT_DIRECT_RULE_SCORE_1;
+        $cmd .= " --TreeFragments" if $_GHKM_TREE_FRAGMENTS;
         if (!defined($_GHKM)) {
           $cmd .= " --SourceSyntax" if $_SOURCE_SYNTAX;
           $cmd .= " --TargetSyntax" if $_TARGET_SYNTAX;
@@ -1434,6 +1453,7 @@ sub extract_phrase {
     $cmd .= " --GZOutput ";
     $cmd .= " --InstanceWeights $_INSTANCE_WEIGHTS_FILE " if defined $_INSTANCE_WEIGHTS_FILE;
     $cmd .= " --BaselineExtract $_BASELINE_EXTRACT" if defined($_BASELINE_EXTRACT) && $PHRASE_EXTRACT =~ /extract-parallel.perl/;
+    $cmd .= " --FlexibilityScore" if $_FLEXIBILITY_SCORE;
     
     map { die "File not found: $_" if ! -e $_ } ($alignment_file_e, $alignment_file_f, $alignment_file_a);
     print STDERR "$cmd\n";
@@ -1454,7 +1474,6 @@ sub extract_phrase {
     foreach my $f (@tempfiles) {
       unlink $f;
     }
-    
 }
 
 ### (6) PHRASE SCORING
@@ -1552,7 +1571,7 @@ sub score_phrase_phrase_extract {
 	      my $inverse = "";
               my $extract_filename = $extract_file;
 	      if ($direction eq "e2f") {
-	          $inverse = " --Inverse";
+	          $inverse = "--Inverse";
                   $extract_filename = $extract_file.".inv";
               }
               
@@ -1571,8 +1590,10 @@ sub score_phrase_phrase_extract {
         $cmd .= " --PCFG" if $_PCFG;
         $cmd .= " --UnpairedExtractFormat" if $_ALT_DIRECT_RULE_SCORE_1 || $_ALT_DIRECT_RULE_SCORE_2;
         $cmd .= " --ConditionOnTargetLHS" if $_ALT_DIRECT_RULE_SCORE_1;
+        $cmd .= " --TreeFragments" if $_GHKM_TREE_FRAGMENTS;
         $cmd .= " $DOMAIN" if $DOMAIN;
         $cmd .= " $CORE_SCORE_OPTIONS" if defined($_SCORE_OPTIONS);
+        $cmd .= " --FlexibilityScore=$FLEX_SCORER" if $_FLEXIBILITY_SCORE;
 
 				# sorting
 				if ($direction eq "e2f" || $_ALT_DIRECT_RULE_SCORE_1 || $_ALT_DIRECT_RULE_SCORE_2) {
@@ -1767,19 +1788,19 @@ sub get_generation {
     while(<E>) {
 	chomp;
 	foreach (split) {
-	    my @FACTOR = split(/\|/);
+	    my @FACTOR = split /\Q$___FACTOR_DELIMITER/;
 
 	    my ($source,$target);
 	    my $first_factor = 1;
 	    foreach my $factor (split(/,/,$factor_e_source)) {
-		$source .= "|" unless $first_factor;
+		$source .= $___FACTOR_DELIMITER unless $first_factor;
 		$first_factor = 0;
 		$source .= $FACTOR[$factor];
 	    }
 
 	    $first_factor = 1;
 	    foreach my $factor (split(/,/,$factor_e)) {
-		$target .= "|" unless $first_factor;
+		$target .= $___FACTOR_DELIMITER unless $first_factor;
 		$first_factor = 0;
 		$target .= $FACTOR[$factor];
 	    }	    
@@ -1859,6 +1880,8 @@ sub create_ini {
      $path++;
    }
    print INI "1 T 1\n" if $_GLUE_GRAMMAR;
+  
+   print INI "1 T 1\n" if $_TRANSLITERATION_PHRASE_TABLE;	
 
    if (defined($_DECODING_GRAPH_BACKOFF)) {
      $_DECODING_GRAPH_BACKOFF =~ s/\s+/ /g;
@@ -1881,7 +1904,7 @@ sub create_ini {
    $basic_weight_count+=2 if defined($_SCORE_OPTIONS) && $_SCORE_OPTIONS =~ /UnalignedPenalty/; # word ins/del
    $basic_weight_count+=2 if defined($_SCORE_OPTIONS) && $_SCORE_OPTIONS =~ /UnalignedFunctionWordPenalty/;
    $basic_weight_count /= 2 if defined($_SCORE_OPTIONS) && $_SCORE_OPTIONS =~ /OnlyDirect/;
-   $basic_weight_count++ unless defined($_SCORE_OPTIONS) && $_SCORE_OPTIONS =~ /NoPhraseCount/; # phrase count feature
+   $basic_weight_count++ if defined($_SCORE_OPTIONS) && $_SCORE_OPTIONS =~ /PhraseCount/; # phrase count feature
    $basic_weight_count++ if defined($_SCORE_OPTIONS) && $_SCORE_OPTIONS =~ /LowCountFeature/; # low count feature
    if (defined($_SCORE_OPTIONS) && $_SCORE_OPTIONS =~ /(\-CountBinFeature [\s\d]*\d)/) {
      $basic_weight_count += scalar split(/\s+/,$1);
@@ -1893,6 +1916,8 @@ sub create_ini {
      $basic_weight_count += 2**$count-1 if $method eq "Subset";
    }     
    $basic_weight_count++ if $_PCFG;
+   $basic_weight_count+=4 if $_FLEXIBILITY_SCORE;
+   $basic_weight_count+=2 if $_FLEXIBILITY_SCORE && $_HIERARCHICAL;
 
    # go over each table
    foreach my $f (split(/\+/,$___TRANSLATION_FACTORS)) {
@@ -1919,9 +1944,15 @@ sub create_ini {
      $phrase_table_impl_name = "PhraseDictionaryBinary" if $phrase_table_impl==1;
      $phrase_table_impl_name = "PhraseDictionaryOnDisk" if $phrase_table_impl==2;
      $phrase_table_impl_name = "PhraseDictionaryMemory" if $phrase_table_impl==6;
+     $phrase_table_impl_name = "PhraseDictionaryALSuffixArray" if $phrase_table_impl==10;
 
+     #table limit
+     my $table_limit = 0;
+     if ($i == 0) {
+       $table_limit = 20;
+     }
      # sum up...
-     $feature_spec .= "$phrase_table_impl_name name=TranslationModel$i num-features=$basic_weight_count path=$file input-factor=$input_factor output-factor=$output_factor\n";
+     $feature_spec .= "$phrase_table_impl_name name=TranslationModel$i table-limit=$table_limit num-features=$basic_weight_count path=$file input-factor=$input_factor output-factor=$output_factor\n";
      $weight_spec .= "TranslationModel$i=";
      for(my $j=0;$j<$basic_weight_count;$j++) { $weight_spec .= " 0.2"; }
      $weight_spec .= "\n";
@@ -1934,17 +1965,18 @@ sub create_ini {
      exit 1 if $i < $stepsused{"T"}; # fatal to define less
    }
 
+   if ($_TRANSLITERATION_PHRASE_TABLE){
+		
+     $feature_spec .= "PhraseDictionaryMemory name=TranslationModel$i table-limit=100 num-features=4 path=$_TRANSLITERATION_PHRASE_TABLE input-factor=0 output-factor=0\n";
+     $weight_spec .= "TranslationModel$i= 0.2 0.2 0.2 0.2\n";
+     $i++;	
+   }  	
+
    # glue grammar
    if ($_GLUE_GRAMMAR) {
      &full_path(\$___GLUE_GRAMMAR_FILE);
      $feature_spec .= "PhraseDictionaryMemory name=TranslationModel$i num-features=1 path=$___GLUE_GRAMMAR_FILE input-factor=0 output-factor=0\n";
      $weight_spec .= "TranslationModel$i= 1.0\n";
-   }
-
-   # ttable limit
-   print INI "\n\# limit on how many phrase translations e for each phrase f are loaded\n# 0 = all elements loaded\n[ttable-limit]\n20\n";
-   foreach(1 .. ($i-1)) {
-     print INI (defined($FIRST_TTABLE{$_})?"20":"0")."\n";
    }
 
    # generation model
@@ -1987,10 +2019,42 @@ sub create_ini {
             $weight_spec .= "LexicalReordering$i=";
             for(my $j=0;$j<$model->{"numfeatures"};$j++) { $weight_spec .= " 0.3"; }
             $weight_spec .= "\n";
-	}
+
         $i++;
+	}
       }
   }
+
+  # operation sequence model
+
+  if($_OSM)
+  {
+    if (defined($_OSM_FACTORS))
+    {
+	my $count = 0;
+	my @factor_values = split(/\+/, $_OSM_FACTORS);
+    	foreach my $factor_val (@factor_values) {
+
+		my ($factor_f,$factor_e) = split(/\-/,$factor_val);
+
+		if($count == 0){
+		$feature_spec .= "OpSequenceModel name=OpSequenceModel$count num-features=5 path=". $_OSM . $factor_val . "/operationLM.bin" . " input-factor=". $factor_f . " output-factor=". $factor_e . " support-features=yes \n";
+	       $weight_spec  .= "OpSequenceModel$count= 0.08 -0.02 0.02 -0.001 0.03\n";		
+		}
+		else{
+			$feature_spec .= "OpSequenceModel name=OpSequenceModel$count num-features=1 path=". $_OSM . $factor_val . "/operationLM.bin" . " input-factor=". $factor_f . " output-factor=". $factor_e . " support-features=no \n";
+	       	$weight_spec  .= "OpSequenceModel$count= 0.08 \n";	
+
+		}
+		$count++;
+	}
+    }
+    else
+    {
+      $feature_spec .= "OpSequenceModel name=OpSequenceModel0 num-features=5 path=". $_OSM . " \n";
+      $weight_spec  .= "OpSequenceModel0= 0.08 -0.02 0.02 -0.001 0.03\n";
+    }
+  }	
 
   # distance-based reordering
   if (!$_HIERARCHICAL) {
@@ -2012,9 +2076,16 @@ sub create_ini {
     $type_name = "IRSTLM" if $type == 1;
     $type_name = "KENLM lazyken=0" if $type == 8;
     $type_name = "KENLM lazyken=1" if $type == 9;
-    
+	
+    my $lm_oov_prob = 0.1;
+	
+    if ($_POST_DECODING_TRANSLIT || $_TRANSLITERATION_PHRASE_TABLE){
+	$lm_oov_prob = -100.0;
+	$_LMODEL_OOV_FEATURE = "yes";
+    } 	   
+ 
     $feature_spec .= "$type_name name=LM$i factor=$f path=$fn order=$o\n";
-    $weight_spec .= "LM$i= 0.5".($_LMODEL_OOV_FEATURE?" 0.1":"")."\n";
+    $weight_spec .= "LM$i= 0.5".($_LMODEL_OOV_FEATURE?" $lm_oov_prob":"")."\n";
     $i++;
   }
   if ($_LMODEL_OOV_FEATURE) {
@@ -2045,11 +2116,12 @@ sub create_ini {
 
   # lattice feature
   if ($_NUM_LATTICE_FEATURES) {
-    print INI "\n\n#lattice or confusion net weights\n[weight-i]\n";
+    $feature_spec .= "InputFeature num-input-features=$_NUM_LATTICE_FEATURES\n";
+    $weight_spec .= "InputFeature0=";
     for (1..$_NUM_LATTICE_FEATURES) {
-      print INI "0.1\n";
+      $weight_spec .= " 0.1";
     }
-    print "\n";
+    $weight_spec .= "\n";
   }
 
   # get addititional content for config file from switch or file
@@ -2067,12 +2139,15 @@ sub create_ini {
   print INI "[feature]\n";
   print INI "UnknownWordPenalty\n";
   print INI "WordPenalty\n";
+  print INI "PhrasePenalty\n";
+  print INI "SoftMatchingFeature name=SM0 path=$_UNKNOWN_WORD_SOFT_MATCHES_FILE\n" if $_TARGET_SYNTAX && defined($_UNKNOWN_WORD_SOFT_MATCHES_FILE);
   print INI $feature_spec;
 
   print INI "\n# dense weights for feature functions\n";
   print INI "[weight]\n";
   print INI "UnknownWordPenalty0= 1\n";
   print INI "WordPenalty0= -1\n";
+  print INI "PhrasePenalty0= 0.2\n";
   print INI $weight_spec;
   close(INI);
 }

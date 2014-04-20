@@ -121,6 +121,8 @@ enum PhraseTableImplementation {
   ,FuzzyMatch    = 11
   ,Compact      = 12
   ,Interpolated = 13
+  ,DSuffixArray = 14
+  ,MemMappedSA = 15
 };
 
 enum InputTypeEnum {
@@ -133,20 +135,16 @@ enum InputTypeEnum {
 };
 
 enum XmlInputType {
-  XmlPassThrough	= 0,
-  XmlIgnore				= 1,
-  XmlExclusive		= 2,
-  XmlInclusive		= 3
+  XmlPassThrough = 0,
+  XmlIgnore      = 1,
+  XmlExclusive   = 2,
+  XmlInclusive   = 3,
+  XmlConstraint	 = 4
 };
 
 enum DictionaryFind {
   Best		= 0
   ,All		= 1
-};
-
-enum ParsingAlgorithm {
-  ParseCYKPlus = 0,
-  ParseScope3 = 1
 };
 
 enum SearchAlgorithm {

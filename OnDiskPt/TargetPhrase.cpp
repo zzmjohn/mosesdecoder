@@ -25,6 +25,7 @@
 #include "moses/TranslationModel/PhraseDictionary.h"
 #include "TargetPhrase.h"
 #include "OnDiskWrapper.h"
+#include "util/exception.hh"
 
 #include <boost/algorithm/string.hpp>
 
@@ -58,7 +59,7 @@ void TargetPhrase::Create1AlignFromString(const std::string &align1Str)
 {
   vector<size_t> alignPoints;
   Moses::Tokenize<size_t>(alignPoints, align1Str, "-");
-  CHECK(alignPoints.size() == 2);
+  UTIL_THROW_IF2(alignPoints.size() != 2, "Incorrectly formatted word alignment: " << align1Str);
   m_align.push_back(pair<size_t, size_t>(alignPoints[0], alignPoints[1]) );
 }
 
@@ -76,7 +77,7 @@ void TargetPhrase::CreateAlignFromString(const std::string &alignStr)
 
 void TargetPhrase::SetScore(float score, size_t ind)
 {
-  CHECK(ind < m_scores.size());
+  assert(ind < m_scores.size());
   m_scores[ind] = score;
 }
 
@@ -132,7 +133,7 @@ char *TargetPhrase::WriteToMemory(OnDiskWrapper &onDiskWrapper, size_t &memUsed)
     memUsed += word.WriteToMemory((char*) currPtr);
   }
 
-  CHECK(memUsed == memNeeded);
+  assert(memUsed == memNeeded);
   return (char *) mem;
 }
 
@@ -150,7 +151,7 @@ void TargetPhrase::Save(OnDiskWrapper &onDiskWrapper)
   file.write(mem, memUsed);
 
   UINT64 endPos = file.tellp();
-  CHECK(startPos + memUsed == endPos);
+  assert(startPos + memUsed == endPos);
 
   m_filePos = startPos;
   free(mem);
@@ -183,7 +184,7 @@ char *TargetPhrase::WriteOtherInfoToMemory(OnDiskWrapper &onDiskWrapper, size_t 
   memUsed += WriteScoresToMemory(mem + memUsed);
 
   //DebugMem(mem, memNeeded);
-  CHECK(memNeeded == memUsed);
+  assert(memNeeded == memUsed);
   return mem;
 }
 
@@ -227,14 +228,17 @@ Moses::TargetPhrase *TargetPhrase::ConvertToMoses(const std::vector<Moses::Facto
     , const std::vector<Moses::FactorType> &outputFactors
     , const Vocab &vocab
     , const Moses::PhraseDictionary &phraseDict
-    , const std::vector<float> &weightT) const
+    , const std::vector<float> &weightT
+    , bool isSyntax) const
 {
   Moses::TargetPhrase *ret = new Moses::TargetPhrase();
 
   // words
   size_t phraseSize = GetSize();
-  CHECK(phraseSize > 0); // last word is lhs
-  --phraseSize;
+  UTIL_THROW_IF2(phraseSize == 0, "Target phrase cannot be empty"); // last word is lhs
+  if (isSyntax) {
+    --phraseSize;
+  }
 
   for (size_t pos = 0; pos < phraseSize; ++pos) {
     GetWord(pos).ConvertToMoses(outputFactors, vocab, ret->AddWord());
@@ -261,38 +265,39 @@ Moses::TargetPhrase *TargetPhrase::ConvertToMoses(const std::vector<Moses::Facto
   ret->SetAlignTerm(alignTerm);
   ret->SetAlignNonTerm(alignNonTerm);
 
-  Moses::Word *lhsTarget = new Moses::Word(true);
-  GetWord(GetSize() - 1).ConvertToMoses(outputFactors, vocab, *lhsTarget);
-  ret->SetTargetLHS(lhsTarget);
+  if (isSyntax) {
+    Moses::Word *lhsTarget = new Moses::Word(true);
+    GetWord(GetSize() - 1).ConvertToMoses(outputFactors, vocab, *lhsTarget);
+    ret->SetTargetLHS(lhsTarget);
+  }
 
   // set source phrase
   Moses::Phrase mosesSP(Moses::Input);
   for (size_t pos = 0; pos < sp->GetSize(); ++pos) {
     sp->GetWord(pos).ConvertToMoses(inputFactors, vocab, mosesSP.AddWord());
   }
-  ret->SetSourcePhrase(mosesSP);
 
   // scores
   ret->GetScoreBreakdown().Assign(&phraseDict, m_scores);
-  ret->Evaluate(mosesSP);
+  ret->Evaluate(mosesSP, phraseDict.GetFeaturesToApply());
 
   return ret;
 }
 
 UINT64 TargetPhrase::ReadOtherInfoFromFile(UINT64 filePos, std::fstream &fileTPColl)
 {
-  CHECK(filePos == (UINT64)fileTPColl.tellg());
+  assert(filePos == (UINT64)fileTPColl.tellg());
 
   UINT64 memUsed = 0;
   fileTPColl.read((char*) &m_filePos, sizeof(UINT64));
   memUsed += sizeof(UINT64);
-  CHECK(m_filePos != 0);
+  assert(m_filePos != 0);
 
   memUsed += ReadAlignFromFile(fileTPColl);
-  CHECK((memUsed + filePos) == (UINT64)fileTPColl.tellg());
+  assert((memUsed + filePos) == (UINT64)fileTPColl.tellg());
 
   memUsed += ReadScoresFromFile(fileTPColl);
-  CHECK((memUsed + filePos) == (UINT64)fileTPColl.tellg());
+  assert((memUsed + filePos) == (UINT64)fileTPColl.tellg());
 
   return memUsed;
 }
@@ -351,7 +356,7 @@ UINT64 TargetPhrase::ReadAlignFromFile(std::fstream &fileTPColl)
 
 UINT64 TargetPhrase::ReadScoresFromFile(std::fstream &fileTPColl)
 {
-  CHECK(m_scores.size() > 0);
+  UTIL_THROW_IF2(m_scores.size() == 0, "Translation rules must must have some scores");
 
   UINT64 bytesRead = 0;
 

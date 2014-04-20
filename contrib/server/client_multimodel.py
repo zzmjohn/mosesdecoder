@@ -16,21 +16,31 @@ else:
     import xmlrpc.client as xmlrpclib
 
 
-def translate(input_object, server, weights=None):
+def translate(input_object, server, weights=None, model_name=None):
+    """translate each sentence in an input_object (list, file-like object or other object that iterates over sentences)
+       server is a xmlrpclib.ServerProxy
+       model_name is the name of the PhraseDictionaryMultiModel(Counts) feature function that the weights should be applied to. It is defined in the moses.ini
+       weights is a list of floats (one float per model, or one float per model per feature)
+    """
 
     for line in input_object:
         params = {}
         params['text'] = line
         if weights:
-            params['weight-t-multimodel'] = weights
+            if not model_name:
+                sys.stderr.write("Error: if you define weights, you need to specify the feature to which the weights are to be applied (e.g. PhraseDictionaryMultiModel0)\n")
+                sys.exit(1)
+            params['model_name'] = model_name
+            params['lambda'] = weights
 
         print server.translate(params)
 
 
-def optimize(phrase_pairs, server):
+def optimize(phrase_pairs, server, model_name):
 
     params = {}
     params['phrase_pairs'] = phrase_pairs
+    params['model_name'] = model_name
     weights = server.optimize(params)
     sys.stderr.write('weight vector (set lambda in moses.ini to this value to set as default): ')
     sys.stderr.write(','.join(map(str,weights)) + '\n')
@@ -64,7 +74,7 @@ def translate_single_line(args):
     params = {}
     params['text'] = line
     if weights:
-        params['weight-t-multimodel'] = weights
+        params['lambda'] = weights
 
     return server.translate(params)['text']
 
@@ -74,6 +84,6 @@ if __name__ == '__main__':
     server = xmlrpclib.ServerProxy(url)
 
     phrase_pairs = read_phrase_pairs(gzip.open('/path/to/moses-regression-tests/models/multimodel/extract.sorted.gz'))
-    weights = optimize(phrase_pairs, server)
+    weights = optimize(phrase_pairs, server, 'PhraseDictionaryMultiModelCounts0')
 
-    translate(sys.stdin, server, weights)
+    translate(sys.stdin, server, weights, 'PhraseDictionaryMultiModelCounts0')

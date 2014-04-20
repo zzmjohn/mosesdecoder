@@ -1,4 +1,3 @@
-#include "util/check.hh"
 #include <stdexcept>
 #include <iostream>
 #include <vector>
@@ -13,6 +12,7 @@
 #include "moses/TranslationModel/PhraseDictionaryMultiModelCounts.h"
 #include "moses/TreeInput.h"
 #include "moses/LM/ORLM.h"
+#include "moses-cmd/IOWrapper.h"
 
 #ifdef WITH_THREADS
 #include <boost/thread.hpp>
@@ -23,6 +23,7 @@
 #include <xmlrpc-c/server_abyss.hpp>
 
 using namespace Moses;
+using namespace MosesCmd;
 using namespace std;
 
 typedef std::map<std::string, xmlrpc_c::value> params_t;
@@ -42,7 +43,7 @@ public:
           xmlrpc_c::value *   const  retvalP) {
     const params_t params = paramList.getStruct(0);
     breakOutParams(params);
-    const PhraseDictionary* pdf = StaticData::Instance().GetPhraseDictionaries()[0];
+    const PhraseDictionary* pdf = PhraseDictionary::GetColl()[0];
     PhraseDictionaryDynSuffixArray* pdsa = (PhraseDictionaryDynSuffixArray*) pdf;
     cerr << "Inserting into address " << pdsa << endl;
     pdsa->insertSnt(source_, target_, alignment_);
@@ -141,11 +142,17 @@ public:
   execute(xmlrpc_c::paramList const& paramList,
           xmlrpc_c::value *   const  retvalP) {
 #ifdef WITH_DLIB
-    const StaticData &staticData = StaticData::Instance();
     const params_t params = paramList.getStruct(0);
-    PhraseDictionaryMultiModel* pdmm = (PhraseDictionaryMultiModel*) staticData.GetPhraseDictionaries()[0];
+    params_t::const_iterator si = params.find("model_name");
+    if (si == params.end()) {
+      throw xmlrpc_c::fault(
+        "Missing name of model to be optimized (e.g. PhraseDictionaryMultiModelCounts0)",
+        xmlrpc_c::fault::CODE_PARSE);
+    }
+    const string model_name = xmlrpc_c::value_string(si->second);
+    PhraseDictionaryMultiModel* pdmm = (PhraseDictionaryMultiModel*) FindPhraseDictionary(model_name);
 
-    params_t::const_iterator si = params.find("phrase_pairs");
+    si = params.find("phrase_pairs");
     if (si == params.end()) {
       throw xmlrpc_c::fault(
         "Missing list of phrase pairs",
@@ -210,6 +217,8 @@ public:
     cerr << "Input: " << source << endl;
     si = params.find("align");
     bool addAlignInfo = (si != params.end());
+    si = params.find("word-align");
+    bool addWordAlignInfo = (si != params.end());
     si = params.find("sg");
     bool addGraphInfo = (si != params.end());
     si = params.find("topt");
@@ -222,7 +231,7 @@ public:
     bool nbest_distinct = (si != params.end());
 
     vector<float> multiModelWeights;
-    si = params.find("weight-t-multimodel");
+    si = params.find("lambda");
     if (si != params.end()) {
         xmlrpc_c::value_array multiModelArray = xmlrpc_c::value_array(si->second);
         vector<xmlrpc_c::value> multiModelValueVector(multiModelArray.vectorValueValue());
@@ -231,17 +240,17 @@ public:
         }
     }
 
+    si = params.find("model_name");
+    if (si != params.end() && multiModelWeights.size() > 0) {
+        const string model_name = xmlrpc_c::value_string(si->second);
+        PhraseDictionaryMultiModel* pdmm = (PhraseDictionaryMultiModel*) FindPhraseDictionary(model_name);
+        pdmm->SetTemporaryMultiModelWeightsVector(multiModelWeights);
+    }
+
     const StaticData &staticData = StaticData::Instance();
 
     if (addGraphInfo) {
       (const_cast<StaticData&>(staticData)).SetOutputSearchGraph(true);
-    }
-
-    if (multiModelWeights.size() > 0) {
-      staticData.SetTemporaryMultiModelWeightsVector(multiModelWeights);
-      if (staticData.GetUseTransOptCache()) {
-          cerr << "Warning: -use-persistent-cache is set to true; sentence-specific weights may be ignored. Disable cache for true results.\n";
-      }
     }
 
     stringstream out, graphInfo, transCollOpts;
@@ -273,6 +282,20 @@ public:
         if (addAlignInfo) {
           retData.insert(pair<string, xmlrpc_c::value>("align", xmlrpc_c::value_array(alignInfo)));
         }
+        if (addWordAlignInfo) {
+          stringstream wordAlignment;
+          OutputAlignment(wordAlignment, hypo);
+          vector<xmlrpc_c::value> alignments;
+          string alignmentPair;
+          while (wordAlignment >> alignmentPair) {
+          	int pos = alignmentPair.find('-');
+          	map<string, xmlrpc_c::value> wordAlignInfo;
+          	wordAlignInfo["source-word"] = xmlrpc_c::value_int(atoi(alignmentPair.substr(0, pos).c_str()));
+          	wordAlignInfo["target-word"] = xmlrpc_c::value_int(atoi(alignmentPair.substr(pos + 1).c_str()));
+          	alignments.push_back(xmlrpc_c::value_struct(wordAlignInfo));
+          }
+          retData.insert(pair<string, xmlrpc_c::value_array>("word-align", alignments));
+        }
 
         if(addGraphInfo) {
           insertGraphInfo(manager,retData);
@@ -282,7 +305,7 @@ public:
           insertTranslationOptions(manager,retData);
         }
         if (nbest_size>0) {
-          outputNBest(manager, retData, nbest_size, nbest_distinct, reportAllFactors);
+          outputNBest(manager, retData, nbest_size, nbest_distinct, reportAllFactors, addAlignInfo);
         }
     }
     pair<string, xmlrpc_c::value>
@@ -321,7 +344,7 @@ public:
 
   void outputChartHypo(ostream& out, const ChartHypothesis* hypo) {
     Phrase outPhrase(20);
-    hypo->CreateOutputPhrase(outPhrase);
+    hypo->GetOutputPhrase(outPhrase);
 
     // delete 1st & last
     assert(outPhrase.GetSize() >= 2);
@@ -372,7 +395,8 @@ public:
                    map<string, xmlrpc_c::value>& retData,
                    const int n=100,
                    const bool distinct=false,
-                   const bool reportAllFactors=false)
+                   const bool reportAllFactors=false,
+                   const bool addAlignmentInfo=false)
   {
     TrellisPathList nBestList;
     manager.CalcNBest(n, nBestList, distinct);
@@ -386,6 +410,7 @@ public:
 
       // output surface
       ostringstream out;
+      vector<xmlrpc_c::value> alignInfo;
       for (int currEdge = (int)edges.size() - 1 ; currEdge >= 0 ; currEdge--) {
         const Hypothesis &edge = *edges[currEdge];
         const Phrase& phrase = edge.GetCurrTargetPhrase();
@@ -397,8 +422,35 @@ public:
             out << *factor << " ";
           }
         }
+
+        if (addAlignmentInfo && currEdge != (int)edges.size() - 1) {
+          map<string, xmlrpc_c::value> phraseAlignInfo;
+          phraseAlignInfo["tgt-start"] = xmlrpc_c::value_int(edge.GetCurrTargetWordsRange().GetStartPos());
+          phraseAlignInfo["src-start"] = xmlrpc_c::value_int(edge.GetCurrSourceWordsRange().GetStartPos());
+          phraseAlignInfo["src-end"] = xmlrpc_c::value_int(edge.GetCurrSourceWordsRange().GetEndPos());
+          alignInfo.push_back(xmlrpc_c::value_struct(phraseAlignInfo));
+        }
       }
       nBestXMLItem["hyp"] = xmlrpc_c::value_string(out.str());
+
+      if (addAlignmentInfo) {
+        nBestXMLItem["align"] = xmlrpc_c::value_array(alignInfo);
+
+        if ((int)edges.size() > 0) {
+          stringstream wordAlignment;
+          OutputAlignment(wordAlignment, edges[0]);
+          vector<xmlrpc_c::value> alignments;
+          string alignmentPair;
+          while (wordAlignment >> alignmentPair) {
+          	int pos = alignmentPair.find('-');
+          	map<string, xmlrpc_c::value> wordAlignInfo;
+          	wordAlignInfo["source-word"] = xmlrpc_c::value_int(atoi(alignmentPair.substr(0, pos).c_str()));
+          	wordAlignInfo["target-word"] = xmlrpc_c::value_int(atoi(alignmentPair.substr(pos + 1).c_str()));
+          	alignments.push_back(xmlrpc_c::value_struct(wordAlignInfo));
+          }
+          nBestXMLItem["word-align"] = xmlrpc_c::value_array(alignments);
+        }
+      }
 
       // weighted score
       nBestXMLItem["totalScore"] = xmlrpc_c::value_double(path.GetTotalScore());
@@ -410,8 +462,8 @@ public:
   void insertTranslationOptions(Manager& manager, map<string, xmlrpc_c::value>& retData) {
     const TranslationOptionCollection* toptsColl = manager.getSntTranslationOptions();
     vector<xmlrpc_c::value> toptsXml;
-    for (size_t startPos = 0 ; startPos < toptsColl->GetSize() ; ++startPos) {
-      size_t maxSize = toptsColl->GetSize() - startPos;
+    for (size_t startPos = 0 ; startPos < toptsColl->GetSource().GetSize() ; ++startPos) {
+      size_t maxSize = toptsColl->GetSource().GetSize() - startPos;
       size_t maxSizePhrase = StaticData::Instance().GetMaxPhraseLength();
       maxSize = std::min(maxSize, maxSizePhrase);
 
@@ -494,7 +546,7 @@ int main(int argc, char** argv)
   xmlrpc_limit_set(XMLRPC_XML_SIZE_LIMIT_ID, 512*1024*1024);
 
   xmlrpc_c::registry myRegistry;
-
+  
   xmlrpc_c::methodPtr const translator(new Translator);
   xmlrpc_c::methodPtr const updater(new Updater);
   xmlrpc_c::methodPtr const optimizer(new Optimizer);
@@ -503,11 +555,20 @@ int main(int argc, char** argv)
   myRegistry.addMethod("updater", updater);
   myRegistry.addMethod("optimize", optimizer);
 
+   xmlrpc_c::serverAbyss myAbyssServer(
+					myRegistry,
+					port,              // TCP port on which to listen
+					logfile
+					);
+  /* doesn't work with xmlrpc-c v. 1.16.33 - ie very old lib on Ubuntu 12.04
   xmlrpc_c::serverAbyss myAbyssServer(
-    myRegistry,
-    port,              // TCP port on which to listen
-    logfile
+    xmlrpc_c::serverAbyss::constrOpt()
+    .registryPtr(&myRegistry)
+    .portNumber(port)              // TCP port on which to listen
+    .logFileName(logfile)
+    .allowOrigin("*")
   );
+  */
 
   cerr << "Listening on port " << port << endl;
   if (isSerial) {
@@ -517,7 +578,6 @@ int main(int argc, char** argv)
   } else {
     myAbyssServer.run();
   }
-  // xmlrpc_c::serverAbyss.run() never returns
-  CHECK(false);
-  return 0;
+  std::cerr << "xmlrpc_c::serverAbyss.run() returned but should not." << std::endl;
+  return 1;
 }

@@ -3,9 +3,19 @@
 #include "SearchNormal.h"
 #include "SearchNormalBatch.h"
 #include "UserMessage.h"
+#include "util/exception.hh"
 
 namespace Moses
 {
+
+Search::Search(Manager& manager)
+  : m_manager(manager)
+  ,m_inputPath()
+  ,m_initialTransOpt()
+{
+  m_initialTransOpt.SetInputPath(m_inputPath);
+}
+
 
 Search *Search::CreateSearch(Manager& manager, const InputType &source,
                              SearchAlgorithm searchAlgorithm, const TranslationOptionCollection &transOptColl)
@@ -20,8 +30,7 @@ Search *Search::CreateSearch(Manager& manager, const InputType &source,
   case NormalBatch:
     return new SearchNormalBatch(manager, source, transOptColl);
   default:
-    UserMessage::Add("ERROR: search. Aborting\n");
-    abort();
+	UTIL_THROW2("ERROR: search. Aborting\n");
     return NULL;
   }
 }

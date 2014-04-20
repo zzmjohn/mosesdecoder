@@ -10,6 +10,7 @@
 #include "moses/Util.h"
 
 #include "util/string_piece_hash.hh"
+#include "util/exception.hh"
 
 namespace Moses
 {
@@ -17,41 +18,34 @@ namespace Moses
 using namespace std;
 
 SourceWordDeletionFeature::SourceWordDeletionFeature(const std::string &line)
-  :StatelessFeatureFunction("SourceWordDeletionFeature", 0, line),
+  :StatelessFeatureFunction(0, line),
    m_unrestricted(true)
 {
   std::cerr << "Initializing source word deletion feature.." << std::endl;
+  ReadParameters();
+}
 
-  string filename;
-  for (size_t i = 0; i < m_args.size(); ++i) {
-    const vector<string> &args = m_args[i];
-
-    if (args[0] == "factor") {
-      m_factorType = Scan<FactorType>(args[1]);
-    } else if (args[0] == "path") {
-      filename = args[1];
-    } else {
-      throw "Unknown argument " + args[0];
-    }
-  }
-
-  // load word list for restricted feature set
-  if (filename != "") {
-    cerr << "loading source word deletion word list from " << filename << endl;
-    if (!Load(filename)) {
-      UserMessage::Add("Unable to load word list for source word deletion feature from file " + filename);
-      //return false;
-    }
+void SourceWordDeletionFeature::SetParameter(const std::string& key, const std::string& value)
+{
+  if (key == "factor") {
+    m_factorType = Scan<FactorType>(value);
+  } else if (key == "path") {
+    m_filename = value;
+  } else {
+    StatelessFeatureFunction::SetParameter(key, value);
   }
 }
 
-bool SourceWordDeletionFeature::Load(const std::string &filePath)
+void SourceWordDeletionFeature::Load()
 {
-  ifstream inFile(filePath.c_str());
-  if (!inFile) {
-    cerr << "could not open file " << filePath << endl;
-    return false;
+  if (m_filename == "") {
+    return;
   }
+
+  cerr << "loading source word deletion word list from " << m_filename << endl;
+
+  ifstream inFile(m_filename.c_str());
+  UTIL_THROW_IF2(!inFile, "Can't open file " << m_filename);
 
   std::string line;
   while (getline(inFile, line)) {
@@ -61,7 +55,12 @@ bool SourceWordDeletionFeature::Load(const std::string &filePath)
   inFile.close();
 
   m_unrestricted = false;
-  return true;
+}
+
+bool SourceWordDeletionFeature::IsUseable(const FactorMask &mask) const
+{
+  bool ret = mask[m_factorType];
+  return ret;
 }
 
 void SourceWordDeletionFeature::Evaluate(const Phrase &source
@@ -85,7 +84,7 @@ void SourceWordDeletionFeature::ComputeFeatures(const Phrase &source,
 
   // flag aligned words
   bool aligned[16];
-  CHECK(sourceLength < 16);
+  UTIL_THROW_IF2(sourceLength >= 16, "Source length must be less than 16 words");
   for(size_t i=0; i<sourceLength; i++)
     aligned[i] = false;
   for (AlignmentInfo::const_iterator alignmentPoint = alignmentInfo.begin(); alignmentPoint != alignmentInfo.end(); alignmentPoint++)
